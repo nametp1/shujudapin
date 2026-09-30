@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<!--
+  数据大屏（Sanvist / Mysany 自研迁移版）— 单文件实现
+  ─ 技术栈：原生 HTML/CSS/JS + ECharts 5、Leaflet 1.9（均走 jsdelivr CDN）
+  ─ 功能：日/月双形态（日=进度条数值卡、月=迷你趋势折线）、4 套角色看板预设（兜底=全局管理）+ 看板组件编辑器
+          （组件勾选/容量校验/区域内拖拽排序编辑器）、卡片标题栏拖拽互换、恢复默认排版、
+          中央深色底图（Esri Dark Gray）+ 聚合圆环/胶囊点位 + 设备详情弹窗、高级搜索浮层
+  ─ 配置持久化：localStorage['dash_board']（各看板独立的版式与时间维度，图表形态固定不可切换）
+  ─ 演示数据：PERIOD_DATA / METRIC_TREND / TRENDS / MAP_MARKERS（接入真实接口时替换）
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据大屏</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #000; overflow: hidden; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+  button { font-family: inherit; border: none; background: none; cursor: pointer; color: inherit; }
+
+  /* ===== 1920x1080 设计稿缩放适配 ===== */
+  #stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; transform-origin: center center; }
+  #screen {
+    width: 100%; height: 100%; display: flex; flex-direction: column; position: relative;
+    background:
+      radial-gradient(1200px 600px at 50% 40%, #0a1526 0%, rgba(10,21,38,0) 60%),
+      linear-gradient(180deg, #050b16 0%, #04070d 100%);
+    color: #e8f1ff; overflow: hidden;
+  }
+
+  /* ===== 顶部全局控制栏 ===== */
+  header {
+    height: 52px; flex: none; position: relative; z-index: 30;
+    background: linear-gradient(180deg, #0b2148 0%, #081730 100%);
+    border-bottom: 1px solid #14406e;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 14px;
+  }
+  .title-wrap {
+    position: absolute; left: 50%; top: 0; transform: translateX(-50%);
+    width: 460px; height: 100%;
+    background: linear-gradient(180deg, #16428a 0%, #0a2350 100%);
+    clip-path: polygon(7% 0, 93% 0, 100% 100%, 0 100%);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .title-wrap h1 { font-size: 22px; font-weight: 700; letter-spacing: 8px; color: #fff; text-shadow: 0 0 12px rgba(53,162,253,.8); }
+  .hd-left, .hd-right { display: flex; align-items: center; gap: 10px; z-index: 1; }
+
+  .seg { display: flex; gap: 6px; }
+  .seg button {
+    min-width: 34px; height: 26px; font-size: 13px; color: #9db8dc;
+    background: rgba(20, 55, 110, .6); border: 1px solid #24549a; border-radius: 4px;
+  }
+  .seg button.active { background: linear-gradient(180deg, #1e6fff, #1252d8); color: #fff; border-color: #3d8bff; box-shadow: 0 0 8px rgba(30,111,255,.6); }
+
+  .date-picker { display: flex; align-items: center; height: 26px; border: 1px solid #24549a; border-radius: 4px; background: rgba(13, 35, 74, .8); overflow: hidden; }
+  .date-picker button { width: 26px; height: 100%; color: #9cc4ff; font-size: 13px; }
+  .date-picker button:disabled { color: #46618c; cursor: not-allowed; }
+  .date-picker .date-text { min-width: 96px; text-align: center; font-size: 13px; color: #e8f1ff; }
+
+  .owner-switch { display: flex; gap: 4px; background: rgba(13, 35, 74, .8); border: 1px solid #24549a; border-radius: 15px; padding: 3px; }
+  .owner-switch button { height: 22px; padding: 0 12px; font-size: 13px; color: #9db8dc; border-radius: 12px; }
+  .owner-switch button.active { background: linear-gradient(180deg, #1e6fff, #1252d8); color: #fff; }
+
+  .icon-btn { width: 30px; height: 26px; display: flex; align-items: center; justify-content: center; color: #9cc4ff; background: rgba(20, 55, 110, .6); border: 1px solid #24549a; border-radius: 4px; }
+  .icon-btn:hover, .icon-btn.on { color: #fff; border-color: #3d8bff; box-shadow: 0 0 8px rgba(30,111,255,.5); }
+  .icon-btn svg { width: 15px; height: 15px; }
+
+  /* ===== 主体三栏 ===== */
+  main { flex: 1; display: flex; gap: 10px; padding: 10px; min-height: 0; }
+  .side { width: 292px; flex: none; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: hidden; }
+  .center { flex: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+  /* ===== 卡片通用 ===== */
+  .card {
+    background: linear-gradient(180deg, rgba(16, 44, 92, .75) 0%, rgba(7, 20, 44, .92) 100%);
+    border: 1px solid #1b4a8f; border-radius: 6px;
+    box-shadow: 0 0 10px rgba(18, 70, 150, .35) inset, 0 0 6px rgba(10, 40, 90, .6);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0;
+  }
+  .card-hd {
+    flex: none; height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 10px;
+    background: linear-gradient(90deg, rgba(30, 90, 180, .45), rgba(30, 90, 180, .08));
+    border-bottom: 1px solid #1b4a8f; font-size: 14px; font-weight: 600; color: #dcecff;
+  }
+  .card-hd .ico { width: 15px; height: 15px; color: #35a2fd; flex: none; }
+  .card-hd .sub { color: #9db8dc; font-weight: 400; }
+  .card-hd .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .card-bd { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+
+  /* 持平标签 */
+  .tag { font-size: 11px; color: #9cc4ff; background: rgba(30, 111, 255, .18); border: 1px solid #2f6cc4; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
+
+  /* ===== 左侧效率指标卡 ===== */
+  .metric { flex: none; }
+  .metric .val-row { display: flex; align-items: baseline; gap: 8px; }
+  .metric .avg { margin-top: 3px; font-size: 12px; color: #7d9bc4; }
+  .metric .val { font-size: 26px; font-weight: 700; color: #fff; line-height: 1.15; }
+  .metric .val small { font-size: 14px; font-weight: 600; }
+
+  .bar { position: relative; margin-top: 8px; height: 8px; border-radius: 4px; background: rgba(18, 48, 96, .9); overflow: visible; }
+  .bar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, #1252d8, #35c8ff); box-shadow: 0 0 6px rgba(53, 200, 255, .6); }
+  .bar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #fff; box-shadow: 0 0 4px #fff; }
+
+
+  /* 卡片右上角涨跌徽标（日=较上一日 / 月=较上一月）与日/月显隐 */
+  .trend { font-size: 12px; font-weight: 700; }
+  .trend.up { color: #28e07c; }
+  .trend.down { color: #ff5b5b; }
+  .day-only, .month-only { display: none !important; }
+  #screen:not(.month) .day-only { display: flex !important; }
+  #screen.month .month-only { display: flex !important; }
+  .bar.cyan .fill { background: linear-gradient(90deg, #0e9cb4, #35e0f2); }
+
+  /* ===== 日 / 月维度切换 ===== */
+  .day-view, .month-view { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #screen.month .day-view { display: none; }
+  #screen:not(.month) .month-view { display: none; }
+  #screen.month .card-hd .tag { display: none; }
+  .month-view { flex-direction: row; gap: 8px; }
+  .month-view .m-left { flex: none; width: 44%; display: flex; flex-direction: column; justify-content: center; }
+  .month-view .m-left .val-row { flex-wrap: wrap; gap: 6px; }
+  .month-view .mini-chart { flex: 1; min-width: 0; min-height: 0; }
+  .cnt-bar { display: inline-block; height: 10px; vertical-align: middle; border-radius: 2px; background: linear-gradient(90deg, #e5261f, #ff9a3d); box-shadow: 0 0 6px rgba(229, 60, 30, .55); }
+
+  /* ===== 环形图卡（设备类型分布 / 当前运行状态） ===== */
+  .donut-card { flex: 1; min-height: 0; }
+  .donut-box { flex: 1; min-height: 0; }
+  .legend { flex: none; display: flex; flex-direction: column; gap: 5px; padding: 4px 2px 2px; }
+  .legend .li { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #c6d9f2; }
+  .legend .li i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .legend .li b { margin-left: auto; color: #fff; font-weight: 600; }
+
+  /* ===== 顶部 4 张汇总卡 ===== */
+  .top-slots { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; height: 100px; }
+  .sum-card .card-hd { justify-content: center; height: 32px; }
+  .sum-blocks { flex: 1; display: flex; align-items: stretch; gap: 8px; padding: 8px 10px 10px; }
+  .sum-blocks .blk {
+    flex: 1; border-radius: 4px; background: rgba(28, 74, 148, .38); border: 1px solid rgba(60, 120, 210, .25);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  }
+  .sum-blocks .blk b { font-size: 16px; font-weight: 700; line-height: 1.1; }
+  .sum-blocks .blk span { font-size: 11px; color: #9db8dc; }
+  .c-green { color: #28e07c; } .c-white { color: #e8f1ff; } .c-orange { color: #ff9f2e; }
+  .c-yellow { color: #ffd23c; } .c-red { color: #ff6b4a; } .c-blue { color: #5fb3ff; }
+
+  /* ===== 中央地图 ===== */
+  .map-area {
+    flex: 1; position: relative; border-radius: 6px; overflow: hidden;
+    background:
+      radial-gradient(900px 480px at 46% 45%, #0b1424 0%, rgba(11, 20, 36, 0) 70%),
+      linear-gradient(180deg, #04060b 0%, #030508 100%);
+    border: 1px solid #122c55;
+  }
+
+  /* 聚合圆环 */
+  .cluster { position: absolute; transform: translate(-50%, -50%); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; z-index: 5; }
+  .cluster.ring { width: 52px; height: 52px; font-size: 15px; background: #06230f; border: 6px solid #1fce6b; box-shadow: 0 0 14px rgba(31, 206, 107, .75), inset 0 0 8px rgba(31,206,107,.5); }
+  .cluster.ring.mid { width: 44px; height: 44px; font-size: 13px; border-width: 5px; }
+  .cluster.dot { width: 26px; height: 26px; font-size: 12px; background: #1fce6b; border: 3px solid #0a3d1f; box-shadow: 0 0 10px rgba(31, 206, 107, .7); }
+
+  /* 单机胶囊标记 */
+  .pin {
+    position: absolute; transform: translate(-50%, -100%); z-index: 6;
+    display: flex; align-items: center; gap: 5px; white-space: nowrap;
+    background: #f7fafc; color: #17273a; border-radius: 14px; padding: 3px 10px 3px 8px;
+    font-size: 12px; font-weight: 600; box-shadow: 0 3px 8px rgba(0, 0, 0, .55);
+  }
+  .pin::after { content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%); border: 5px solid transparent; border-bottom: 0; border-top-color: #f7fafc; }
+  .pin svg { width: 11px; height: 11px; flex: none; }
+
+  /* ===== 高级搜索浮层 ===== */
+  .filter-panel {
+    position: absolute; top: 60px; right: 14px; width: 330px; z-index: 60;
+    background: linear-gradient(180deg, #16386f 0%, #102c5c 100%);
+    border: 1px solid #2f6cc4; border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, .6), 0 0 12px rgba(30, 111, 255, .25);
+    padding: 16px 18px 20px; display: none;
+  }
+  .filter-panel.show { display: block; }
+  .filter-panel h3 { font-size: 17px; font-weight: 700; color: #fff; padding-bottom: 12px; border-bottom: 1px solid rgba(120, 170, 235, .35); margin-bottom: 14px; }
+  .f-group { margin-bottom: 13px; }
+  .f-group label { display: block; font-size: 13px; color: #d5e4f8; margin-bottom: 7px; }
+  .f-select {
+    position: relative; height: 40px; border-radius: 6px; background: #1d4a8f;
+    border: 1px solid #2f6cc4; display: flex; align-items: center; padding: 0 12px;
+    font-size: 14px; color: #fff; cursor: pointer;
+  }
+  .f-select .ph { color: #8fb0d9; }
+  .f-select .arr { margin-left: auto; color: #cfe0f5; font-size: 11px; transition: transform .2s; }
+  .f-select.input { cursor: text; }
+  .f-select.input input { flex: 1; background: none; border: none; outline: none; color: #fff; font-size: 14px; }
+  .f-select.input input::placeholder { color: #8fb0d9; }
+  .f-select .search-ico { color: #cfe0f5; display: flex; }
+  .f-select .search-ico svg { width: 15px; height: 15px; }
+  .f-dropdown {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5;
+    background: #1d4a8f; border: 1px solid #2f6cc4; border-radius: 6px; overflow: hidden; display: none;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .5);
+  }
+  .f-dropdown.show { display: block; }
+  .f-dropdown .opt { height: 40px; display: flex; align-items: center; padding: 0 14px; font-size: 14px; color: #fff; cursor: pointer; }
+  .f-dropdown .opt:hover, .f-dropdown .opt.selected { background: #2f6cc4; }
+
+  /* ===== 油耗 / 告警 / 预警 ===== */
+  .big-val { font-size: 26px; font-weight: 700; color: #fff; margin: 2px 0 0; }
+  .big-val small { font-size: 14px; font-weight: 600; margin-left: 3px; }
+  .oil-card { flex: none; height: 150px; }
+
+  /* 卡内垂直空间均衡：进度条贴底、数值居中，消除底部大片留白 */
+  .metric .day-view .bar { margin-top: auto; }
+  .oil-card .day-view .big-val { margin: auto 0; }
+  .mileage-card .day-view { justify-content: center; }
+  .alarm-card { flex: none; height: 150px; }
+  .warn-card { flex: 1; min-height: 0; }
+  .warn-card .card-bd { padding-top: 2px; }
+  .warn-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .warn-table th { text-align: left; font-weight: 500; color: #d5e4f8; padding: 7px 6px; border-bottom: 1px solid rgba(80, 140, 220, .3); }
+  .warn-table th.num, .warn-table td.num { text-align: right; color: #4da3ff; }
+  .warn-table td { padding: 7px 6px; color: #c6d9f2; border-bottom: 1px solid rgba(80, 140, 220, .12); }
+  .warn-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #5d7699; font-size: 13px; }
+
+  /* 右侧栏高度分配 */
+  .status-card { flex: 2 1 0; min-height: 0; }
+
+  /* ===== 侧栏单位制布局：小卡=1 单位，大卡/预警=2 单位，每栏容量 6 单位 ===== */
+  .side > .card { height: auto !important; min-height: 0; flex: 1 1 0; overflow: hidden; }
+  .side > .card.unit2 { flex: 2 1 0; }
+
+  /* ===== 拖拽 / Toast / 角色看板 / 编辑器 ===== */
+  #screen.month .card-hd .tag { display: none; }
+  .card[draggable="true"] .card-hd { cursor: move; }
+  .card.dragging { opacity: .3; }
+  .card.drop-hint { outline: 2px dashed #3d8bff; outline-offset: -2px; }
+  .toast { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%) translateY(20px); z-index: 210; background: rgba(13, 35, 74, .95); border: 1px solid #2f6cc4; border-radius: 6px; padding: 8px 20px; font-size: 13px; color: #fff; opacity: 0; pointer-events: none; transition: all .25s; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .board-switch { position: relative; }
+  .board-switch > button { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; font-size: 12px; color: #cfe0f5; background: rgba(20, 55, 110, .6); border: 1px solid #24549a; border-radius: 4px; }
+  .board-menu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 60; min-width: 150px; background: #102c5c; border: 1px solid #2f6cc4; border-radius: 6px; overflow: hidden; display: none; box-shadow: 0 8px 20px rgba(0, 0, 0, .5); }
+  .board-menu.show { display: block; }
+  .board-menu button { display: block; width: 100%; text-align: left; padding: 0 12px; height: 34px; font-size: 13px; color: #fff; }
+  .board-menu button:hover { background: #2f6cc4; }
+  .board-menu button .edit-tag { float: right; font-size: 10px; color: #9cc4ff; border: 1px solid #2f6cc4; border-radius: 3px; padding: 1px 6px; margin-top: 6px; margin-left: 6px; }
+  .board-menu button .edit-tag:hover { background: #1e6fff; color: #fff; }
+  .board-menu-ft { border-top: 1px solid rgba(120, 170, 235, .3); }
+  .board-menu-ft button { width: 100%; height: 34px; font-size: 12px; color: #9cc4ff; text-align: center; }
+  .board-menu-ft button:hover { background: #2f6cc4; color: #fff; }
+  .editor-mask { position: absolute; inset: 0; z-index: 150; background: rgba(0, 0, 0, .55); display: none; align-items: center; justify-content: center; }
+  .editor-mask.show { display: flex; }
+  .editor-panel { width: 620px; max-height: 82%; background: linear-gradient(180deg, #16386f, #102c5c); border: 1px solid #2f6cc4; border-radius: 8px; display: flex; flex-direction: column; box-shadow: 0 12px 32px rgba(0, 0, 0, .6); }
+  .editor-hd { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, .14); font-size: 16px; color: #fff; }
+  .editor-hd span { cursor: pointer; color: #cfe0f5; }
+  .editor-hd span:hover { color: #fff; }
+  .editor-tip { padding: 10px 18px 0; font-size: 12px; color: #9db8dc; }
+  .editor-body { flex: 1; overflow-y: auto; padding: 12px 18px 4px; min-height: 0; }
+  .editor-ft { padding: 12px 18px 16px; display: flex; justify-content: flex-end; border-top: 1px solid rgba(255, 255, 255, .14); }
+  .editor-ft button { height: 36px; padding: 0 30px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all .15s; }
+  .editor-ft #editorDone { background: linear-gradient(180deg, #1e6fff, #1252d8); color: #fff; box-shadow: 0 2px 10px rgba(30, 111, 255, .45); letter-spacing: 2px; }
+  .editor-ft #editorDone:hover { filter: brightness(1.18); box-shadow: 0 4px 14px rgba(30, 111, 255, .6); }
+  .editor-ft #editorDone:active { transform: scale(.96); }
+  .ed-name-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .ed-name-row label { font-size: 13px; color: #d5e4f8; flex: none; }
+  .ed-name-row input { flex: 1; height: 36px; background: #1d4a8f; border: 1px solid #2f6cc4; border-radius: 6px; color: #fff; font-size: 14px; padding: 0 12px; outline: none; }
+  .ed-name-row input:focus { border-color: #3d8bff; }
+  .ed-sec { margin-bottom: 14px; }
+  .ed-sec-t { font-size: 13px; color: #9cc4ff; margin-bottom: 8px; font-weight: 600; }
+  .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+  .ed-chk { display: flex; align-items: center; gap: 8px; border: 1px solid #2f6cc4; border-radius: 4px; padding: 7px 10px; font-size: 13px; color: #e8f1ff; cursor: pointer; background: rgba(30, 111, 255, .08); user-select: none; }
+  .ed-chk:hover { border-color: #3d8bff; }
+  .ed-chk.on { border-color: #35c8ff; background: rgba(53, 200, 255, .15); cursor: grab; }
+  .ed-chk.dis { opacity: .4; cursor: not-allowed; }
+  .ed-chk input { display: none; }
+  .ed-chk i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #2f6cc4; flex: none; position: relative; }
+  .ed-chk.on i { background: #1e6fff; border-color: #3d8bff; }
+  .ed-chk.on i::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: 2px solid #fff; border-top: 0; border-left: 0; transform: rotate(45deg); }
+  .ed-chk em { font-style: normal; font-size: 10px; color: #ffd23c; margin-left: auto; }
+  .ed-chk em.mut { color: #7d9bc4; }
+  .ed-chk.dragging { opacity: .25; border-style: dashed; }
+  .ed-chk.hint { border-color: #ffd23c; background: rgba(255, 210, 60, .14); box-shadow: inset 0 3px 0 #ffd23c; }
+
+  /* ===== Leaflet 深色底图适配 ===== */
+  .map-area { z-index: 1; }
+  .map-area .leaflet-container { background: #04060b; font-family: inherit; }
+  .map-tiles { filter: brightness(.8) sepia(.4) hue-rotate(190deg) saturate(1.8); }
+  .map-area::after { content: ''; position: absolute; inset: 0; z-index: 400; pointer-events: none; background: rgba(10, 30, 70, .18); }
+  .map-area .leaflet-marker-icon .pin { position: static; transform: none; }
+  .map-area .pin-m { display: inline-block; transform: translate(-50%, -100%); width: max-content; }
+  .map-area .leaflet-marker-icon .cluster { position: static; transform: none; }
+
+  /* ===== 设备详情弹窗（Leaflet Popup 定制） ===== */
+  .dev-popup .leaflet-popup-content-wrapper { background: #153e8f; color: #fff; border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
+  .dev-popup .leaflet-popup-content { margin: 0; width: 320px !important; font-family: inherit; line-height: 1.4; }
+  .dev-popup .leaflet-popup-tip { background: #153e8f; }
+  .dev-popup a.leaflet-popup-close-button { color: #cfe0f5; font-size: 16px; padding: 8px 10px 0 0; }
+  .dev-popup a.leaflet-popup-close-button:hover { color: #fff; background: none; }
+  .pp-hd { display: flex; align-items: center; gap: 10px; padding: 12px 36px 12px 14px; border-bottom: 1px solid rgba(255, 255, 255, .14); }
+  .pp-hd .sany { width: 34px; height: 34px; border-radius: 50%; background: #fff; color: #e5261f; font-size: 9px; font-weight: 800; letter-spacing: .5px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .pp-hd b { font-size: 17px; }
+  .pp-bd { padding: 13px 16px 16px; }
+  .pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 10px; }
+  .pp-grid .full { grid-column: 1 / -1; }
+  .pp-grid label { display: block; font-size: 12px; color: #9db8dc; margin-bottom: 4px; }
+  .pp-grid b { font-size: 14.5px; font-weight: 700; color: #fff; word-break: break-all; }
+</style>
+</head>
+<body>
+<div id="stage">
+<div id="screen">
+
+  <!-- ===================== 顶部全局控制栏 ===================== -->
+  <header>
+    <div class="hd-left">
+      <div class="board-switch">
+        <button id="boardBtn"><span id="boardName">全局管理</span><span class="arr" style="font-size:10px">▼</span></button>
+        <div class="board-menu" id="boardMenu">
+          <button data-role="admin">全局管理</button>
+          <button data-role="fleet">车队运营</button>
+          <button data-role="maint">维保健康</button>
+          <button data-role="personal">个人作业</button>
+          <div class="board-menu-ft"><button id="editBoardBtn">编辑看板组件</button></div>
+        </div>
+      </div>
+      <div class="seg" id="periodSeg">
+        <button class="active" data-v="day">日</button>
+        <button data-v="month">月</button>
+      </div>
+      <div class="date-picker">
+        <button id="datePrev">&lt;</button>
+        <span class="date-text" id="dateText">2026-09-28</span>
+        <button id="dateNext" disabled>&gt;</button>
+      </div>
+    </div>
+    <div class="title-wrap"><h1>数据大屏</h1></div>
+    <div class="hd-right">
+      <div class="owner-switch" id="ownerSeg">
+        <button class="active">全部</button>
+        <button>自有</button>
+        <button>租赁</button>
+        <button>分包</button>
+      </div>
+      <button class="icon-btn" id="filterBtn" title="高级搜索">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h18l-7 8.5V19l-4 2v-8.5L3 4z"/></svg>
+      </button>
+      <button class="icon-btn" id="fullBtn" title="全屏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===================== 主体 ===================== -->
+  <main>
+
+    <!-- ========== 左侧指标栏 ========== -->
+    <aside class="side">
+      <div class="card metric" style="height:132px">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          出勤率
+          <span class="right"><span class="tag">= 持平</span></span>
+        </div>
+        <div class="card-bd">
+          <div class="day-view">
+            <div class="val-row"><span class="val">25<small>%</small></span></div>
+            <div class="avg">机群平均值 25%</div>
+            <div class="bar"><i class="fill" style="width:25%"></i><i class="tick" style="left:25%"></i></div>
+          </div>
+          <div class="month-view">
+            <div class="m-left">
+              <div class="val-row"><span class="val">56.5<small>%</small></span><span class="tag">= 持平</span></div>
+              <div class="avg">机群平均值 66.5%</div>
+            </div>
+            <div class="mini-chart" data-trend="chuqin"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card metric" style="height:132px">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 12l6-6"/><path d="M17 3h4v4"/></svg>
+          利用率
+          <span class="right"><span class="tag">= 持平</span></span>
+        </div>
+        <div class="card-bd">
+          <div class="day-view">
+            <div class="val-row"><span class="val">32.4<small>%</small></span></div>
+            <div class="avg">机群平均值 32.4%</div>
+            <div class="bar"><i class="fill" style="width:32.4%"></i><i class="tick" style="left:32.4%"></i></div>
+          </div>
+          <div class="month-view">
+            <div class="m-left">
+              <div class="val-row"><span class="val">53<small>%</small></span><span class="tag">= 持平</span></div>
+              <div class="avg">机群平均值 53%</div>
+            </div>
+            <div class="mini-chart" data-trend="liyong"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card metric" style="height:132px">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12V6M12 12l4 4"/></svg>
+          日台均工时
+          <span class="right"><span class="tag">= 持平</span></span>
+        </div>
+        <div class="card-bd">
+          <div class="day-view">
+            <div class="val-row"><span class="val">8.4<small>h</small></span></div>
+            <div class="avg">机群平均值 8.4h</div>
+            <div class="bar"><i class="fill" style="width:100%"></i><i class="tick" style="left:100%"></i></div>
+          </div>
+          <div class="month-view">
+            <div class="m-left">
+              <div class="val-row"><span class="val">8.2<small>h</small></span><span class="tag">= 持平</span></div>
+              <div class="avg">机群平均值 8.2h</div>
+            </div>
+            <div class="mini-chart" data-trend="ritai"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card metric" style="height:132px">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>
+          有效工时比
+          <span class="right"><span class="tag">= 持平</span></span>
+        </div>
+        <div class="card-bd">
+          <div class="day-view">
+            <div class="val-row"><span class="val">100<small>%</small></span></div>
+            <div class="avg">机群平均值 100%</div>
+            <div class="bar"><i class="fill" style="width:100%"></i><i class="tick" style="left:100%"></i></div>
+          </div>
+          <div class="month-view">
+            <div class="m-left">
+              <div class="val-row"><span class="val">87.2<small>%</small></span><span class="tag">= 持平</span></div>
+              <div class="avg">机群平均值 87.3%</div>
+            </div>
+            <div class="mini-chart" data-trend="youxiao"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card donut-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 1-9 9h9V3z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15V3.5z"/></svg>
+          设备类型分布
+        </div>
+        <div class="card-bd">
+          <div class="donut-box" id="chartType"></div>
+          <div class="legend" id="legendType"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ========== 中央区域 ========== -->
+    <section class="center">
+      <!-- 顶部 4 张汇总卡 -->
+      <div class="top-slots">
+        <div class="card sum-card">
+          <div class="card-hd">设备统计 [315]</div>
+          <div class="sum-blocks">
+            <div class="blk" title="自有：315（占比 100.00%）"><b class="c-white">100.00%</b><span>自有</span></div>
+            <div class="blk" title="租赁：0（占比 0.00%）"><b class="c-white">0.00%</b><span>租赁</span></div>
+            <div class="blk" title="分包：0（占比 0.00%）"><b class="c-white">0.00%</b><span>分包</span></div>
+          </div>
+        </div>
+        <div class="card sum-card">
+          <div class="card-hd">在线状态</div>
+          <div class="sum-blocks">
+            <div class="blk"><b class="c-green" id="onlineVal">217</b><span>在线</span></div>
+            <div class="blk"><b class="c-white" id="offlineVal">98</b><span>离线</span></div>
+          </div>
+        </div>
+        <div class="card sum-card">
+          <div class="card-hd">闲置设备</div>
+          <div class="sum-blocks">
+            <div class="blk"><b class="c-orange">0.00%</b><span>闲置率</span></div>
+            <div class="blk"><b class="c-orange">0</b><span>闲置台数</span></div>
+          </div>
+        </div>
+        <div class="card sum-card">
+          <div class="card-hd">不可用设备</div>
+          <div class="sum-blocks">
+            <div class="blk"><b class="c-yellow">0</b><span>停机</span></div>
+            <div class="blk"><b class="c-red">0</b><span>维修</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 中央地图（深色底图 + 点位由 JS 注入） -->
+      <div class="map-area" id="mapArea"></div>
+    </section>
+
+    <!-- ========== 右侧指标栏 ========== -->
+    <aside class="side">
+      <div class="card status-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          当前运行状态
+        </div>
+        <div class="card-bd">
+          <div class="donut-box" id="chartStatus"></div>
+          <div class="legend" id="legendStatus"></div>
+        </div>
+      </div>
+
+      <div class="card oil-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/></svg>
+          油耗统计
+          <span class="right" style="color:#9cc4ff;font-size:11px;cursor:pointer">▼</span>
+        </div>
+        <div class="card-bd">
+          <div class="day-view">
+            <div class="big-val">39.1<small>L</small></div>
+            <div class="bar cyan" style="margin-top:auto"><i class="fill" style="width:39%"></i></div>
+          </div>
+          <div class="month-view">
+            <div class="m-left" style="justify-content:center">
+              <div class="big-val">1162.9<small>L</small></div>
+            </div>
+            <div class="mini-chart" data-trend="oil"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card oil-card mileage-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 12l4-4"/><path d="M12 7v1M17 12h-1M12 17v-1M7 12h1"/></svg>
+          里程统计
+          <span class="right trend up day-only" title="较上一日">↑ 28.4%</span>
+          <span class="right trend up month-only" title="较上一月">↑ 6.2%</span>
+        </div>
+        <div class="card-bd">
+          <div class="day-view">
+            <div class="big-val">126.8<small>km</small></div>
+          </div>
+          <div class="month-view">
+            <div class="m-left" style="justify-content:center">
+              <div class="big-val">3218.4<small>km</small></div>
+            </div>
+            <div class="mini-chart" data-trend="mileage"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card donut-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          工时占比
+        </div>
+        <div class="card-bd">
+          <div class="donut-box" id="chartWH"></div>
+          <div class="legend" id="legendWH"></div>
+        </div>
+      </div>
+
+      <div class="card alarm-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+          告警总数
+        </div>
+        <div class="card-bd">
+          <div class="big-val" id="alarmVal">0<small>条</small></div>
+        </div>
+      </div>
+
+      <div class="card warn-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+          预警信息
+        </div>
+        <div class="card-bd">
+          <table class="warn-table">
+            <thead><tr><th style="width:56px">序号</th><th>告警类型</th><th class="num">次数</th></tr></thead>
+            <tbody id="warnBody"></tbody>
+          </table>
+          <div class="warn-empty" id="warnEmpty">暂无预警信息</div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ===================== 高级搜索浮层 ===================== -->
+  <div class="filter-panel" id="filterPanel">
+    <h3>高级搜索</h3>
+    <div class="f-group">
+      <label>所属组织</label>
+      <div class="f-select"><span>TIRAN INDONESIA</span><span class="arr">▼</span></div>
+    </div>
+    <div class="f-group">
+      <label>所属项目</label>
+      <div class="f-select"><span class="ph">请选择所属项目</span><span class="arr">▼</span></div>
+    </div>
+    <div class="f-group" style="margin-bottom:0">
+      <label>设备类型</label>
+      <div class="f-select input" id="typeSelect">
+        <input type="text" placeholder="请选择设备类型" id="typeInput" readonly>
+        <span class="search-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></span>
+        <div class="f-dropdown" id="typeDropdown">
+          <div class="opt">自装卸车</div>
+          <div class="opt selected">平地机</div>
+          <div class="opt">挖掘机</div>
+          <div class="opt">压路机</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自定义看板编辑器 -->
+  <div class="editor-mask" id="editorMask">
+    <div class="editor-panel">
+      <div class="editor-hd"><b id="editorTitle">组件配置</b><span id="editorClose">✕</span></div>
+      <p class="editor-tip">组件只能从现有 15 个指标组件中勾选（每个仅一次）：顶部最多 4 个；左/右侧容量各 6 单位——小卡占 1 单位、预警与大卡占 2 单位（大卡=2 小卡）；已勾选组件可在本区域内拖拽排序，未勾选的组件将隐藏。</p>
+      <div class="editor-body" id="editorBody"></div>
+      <div class="editor-ft"><button id="editorDone">应用配置</button></div>
+    </div>
+  </div>
+
+  <!-- Toast 提示 -->
+  <div class="toast" id="toast"></div>
+
+</div>
+</div>
+
+<script>
+/* 全局错误横幅：启动/运行异常直接显示在页面顶部，便于定位 */
+window.onerror = function (msg, src, line, col) {
+  var bar = document.getElementById('errBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'errBar';
+    bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#b3261e;color:#fff;font:12px/1.6 monospace;padding:6px 12px;white-space:pre-wrap;';
+    (document.body || document.documentElement).appendChild(bar);
+  }
+  bar.textContent = 'JS 错误：' + msg + ' @' + (src || '').split('/').pop() + ':' + line + ':' + col;
+};
+
+/* ================= 1920x1080 等比缩放适配 ================= */
+const stage = document.getElementById('stage');
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  stage.style.transform = `translate(-50%, -50%) scale(${s})`;
+}
+fit(); addEventListener('resize', fit);
+
+/* ================= 环形图 ================= */
+const typeData = [
+  { name: '压路机',   value: 1,   itemStyle: { color: '#5b6cff' } },
+  { name: '平地机',   value: 2,   itemStyle: { color: '#35c8ff' } },
+  { name: '挖掘机',   value: 39,  itemStyle: { color: '#2e7bff' } },
+  { name: '自卸卡车', value: 273, itemStyle: { color: '#ff9f2e' } }
+];
+const statusData = [
+  { name: '行驶', value: 111, itemStyle: { color: '#2e7bff' } },
+  { name: '怠速', value: 95,  itemStyle: { color: '#19d3e8' } },
+  { name: '离线', value: 80,  itemStyle: { color: '#8a97a8' } },
+  { name: '工作', value: 25,  itemStyle: { color: '#28e07c' } },
+  { name: '停车', value: 4,   itemStyle: { color: '#ff9f2e' } },
+  { name: '上电', value: 2,   itemStyle: { color: '#ffd23c' } }
+];
+
+/* ================= 角色专属看板配置（dash_board：版式 + 时间维度） ================= */
+const ROLE_PRESETS = {
+  admin: { name: '全局管理', period: 'day',
+    top: ['devStat', 'idle', 'online', 'unavail'], left: ['chuqin', 'liyong', 'ritai', 'youxiao', 'typeDist'], right: ['statusDist', 'oil', 'mileage', 'warn'] },
+  fleet: { name: '车队运营', period: 'day',
+    top: ['online', 'devStat', 'unavail', 'idle'], left: ['chuqin', 'youxiao', 'ritai', 'liyong', 'workhour'], right: ['statusDist', 'mileage', 'oil', 'warn'] },
+  maint: { name: '维保健康', period: 'day',
+    top: ['unavail', 'online', 'idle', 'devStat'], left: ['statusDist', 'alarm', 'warn', 'ritai'], right: ['workhour', 'mileage', 'oil', 'liyong'] },
+  personal: { name: '个人作业', period: 'day',
+    top: ['online', 'unavail', 'devStat', 'idle'], left: ['ritai', 'youxiao', 'oil', 'chuqin', 'workhour'], right: ['statusDist', 'alarm', 'warn', 'mileage'] }
+};
+/* 预设版式版本号：ROLE_PRESETS 变更时递增，自动失效旧的自定义缓存，使新预设生效 */
+const PRESET_VERSION = 'v1.2.2';
+let board = { role: 'admin', customs: {} };
+try {
+  const s = JSON.parse(localStorage.getItem('dash_board') || 'null');
+  if (s && s.role) {
+    if (s.pv !== PRESET_VERSION) {
+      // 预设已更新：丢弃基于旧版预设保存的自定义，仅保留角色
+      board = { role: s.role, customs: {} };
+    } else {
+      board = s;
+      if (!board.customs) board.customs = {};
+      if (s.layout && !board.customs[s.role]) board.customs[s.role] = { layout: s.layout, period: s.period };
+    }
+  }
+} catch (e) {}
+if (!ROLE_PRESETS[board.role]) board.role = 'admin';   // 未知/旧自定义角色兜底：全局管理
+if (!board.customs) board.customs = {};
+const preset = () => ROLE_PRESETS[board.role];
+const curCustom = () => board.customs[board.role];
+/* 侧栏单位制：小卡=1 单位，大卡（typeDist/statusDist）/预警（warn）/工时占比=2 单位，每栏容量 6 */
+const AREA_UNITS = { top: 4, left: 6, right: 6 };
+const unitOf = k => (k === 'warn' || k === 'typeDist' || k === 'statusDist' || k === 'workhour') ? 2 : 1;
+const unitsOf = arr => arr.reduce((n, k) => n + unitOf(k), 0);
+function saveBoard() {
+  if (!board.customs) board.customs = {};
+  board.customs[board.role] = { layout: getLayout(), period };
+  board.pv = PRESET_VERSION;
+  try { localStorage.setItem('dash_board', JSON.stringify(board)); } catch (e) {}
+}
+
+/* ================= 占比卡：环形饼图（固定形态） ================= */
+const distData = { typeDist: { data: typeData, total: 315 }, statusDist: { data: statusData, total: 310 } };
+const distCharts = {};
+function buildPieOpt(data, total) {
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}：{c}（{d}%）', backgroundColor: '#0f2c5c', borderColor: '#2f6cc4', textStyle: { color: '#fff' } },
+    title: {
+      text: `{a|${total}}{b|台}`, subtext: '全部设备',
+      left: 'center', top: '37%',
+      textStyle: { rich: { a: { color: '#fff', fontSize: 24, fontWeight: 700 }, b: { color: '#fff', fontSize: 12, fontWeight: 600 } } },
+      subtextStyle: { color: '#9db8dc', fontSize: 12 }
+    },
+    series: [{
+      type: 'pie', radius: ['62%', '82%'], center: ['50%', '48%'],
+      label: { show: false }, labelLine: { show: false },
+      itemStyle: { borderColor: 'rgba(5,10,20,.8)', borderWidth: 1 },
+      data
+    }]
+  };
+}
+function initDist(id, key, data, total) {
+  const chart = echarts.init(document.getElementById(id));
+  distCharts[key] = chart;
+  chart.setOption(buildPieOpt(data, total));
+  const box = document.getElementById(id.replace('chart', 'legend'));
+  box.innerHTML = data.map(d =>
+    `<div class="li"><i style="background:${d.itemStyle.color}"></i>${d.name}<b>${d.value}</b></div>`
+  ).join('');
+  addEventListener('resize', () => chart.resize());
+}
+initDist('chartType', 'typeDist', typeData, 315);
+initDist('chartStatus', 'statusDist', statusData, 310);
+
+/* 工时占比环形图：有效工时 + 怠速工时（中心显示总工时） */
+const whData = [
+  { name: '有效工时', value: 6.9, itemStyle: { color: '#28e07c' } },
+  { name: '怠速工时', value: 1.5, itemStyle: { color: '#19d3e8' } }
+];
+(function initWorkhour() {
+  const chart = echarts.init(document.getElementById('chartWH'));
+  distCharts['workhour'] = chart;
+  chart.setOption({
+    tooltip: { trigger: 'item', formatter: p => `${p.name}：${p.value}h（${p.percent}%）`, backgroundColor: '#0f2c5c', borderColor: '#2f6cc4', textStyle: { color: '#fff' } },
+    title: {
+      text: `{a|8.4}{b|h}`, subtext: '总工时',
+      left: 'center', top: '37%',
+      textStyle: { rich: { a: { color: '#fff', fontSize: 24, fontWeight: 700 }, b: { color: '#fff', fontSize: 12, fontWeight: 600 } } },
+      subtextStyle: { color: '#9db8dc', fontSize: 12 }
+    },
+    series: [{
+      type: 'pie', radius: ['62%', '82%'], center: ['50%', '48%'],
+      label: { show: false }, labelLine: { show: false },
+      itemStyle: { borderColor: 'rgba(5,10,20,.8)', borderWidth: 1 },
+      data: whData
+    }]
+  });
+  document.getElementById('legendWH').innerHTML = whData.map(d =>
+    `<div class="li"><i style="background:${d.itemStyle.color}"></i>${d.name}<b>${d.value}h</b></div>`
+  ).join('');
+  addEventListener('resize', () => chart.resize());
+})();
+
+/* ================= 静态演示数据（日 / 月两套） ================= */
+const PERIOD_DATA = {
+  day:   { online: 217, offline: 98, alarm: 0, warns: [] },
+  month: { online: 217, offline: 98, alarm: 5, warns: [{ no: 1, type: '离线', ratio: 1 }] }
+};
+const METRIC_TREND = {
+  chuqin:  { unit: '%', base: 62,  amp: 60, refBase: 85,  refColor: '#ffd23c' },
+  liyong:  { unit: '%', base: 52,  amp: 50, refBase: 55,  refColor: '#ffd23c' },
+  ritai:   { unit: 'h', base: 8.2, amp: 4,  refBase: 8.2, refColor: '#ffd23c' },
+  youxiao: { unit: '%', base: 88,  amp: 22, refBase: 87,  refColor: '#ff5b5b' },
+  oil:     { unit: 'L', base: 40,  amp: 26, refBase: 0,   refColor: '' },
+  mileage: { unit: 'km', base: 128, amp: 90, refBase: 0,  refColor: '' }
+};
+function seeded(seed) { let s = seed; return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
+const TRENDS = {};
+Object.keys(METRIC_TREND).forEach((key, i) => {
+  const cfg = METRIC_TREND[key]; const rnd = seeded(42 + i * 7);
+  const dates = [], vals = [], refs = [];
+  for (let d = 1; d <= 30; d++) {
+    dates.push('2026-09-' + String(d).padStart(2, '0'));
+    vals.push(Math.max(0, +(cfg.base + (rnd() - 0.5) * cfg.amp).toFixed(1)));
+    if (cfg.refBase) refs.push(Math.max(0, +(cfg.refBase + (rnd() - 0.5) * cfg.amp * 0.4).toFixed(1)));
+  }
+  TRENDS[key] = { dates, vals, refs };
+});
+
+/* ================= 顶部控制栏交互 ================= */
+const screenEl = document.getElementById('screen');
+const dateText = document.getElementById('dateText');
+const dateNext = document.getElementById('dateNext');
+let period = 'day';
+const TODAY = new Date(2026, 8, 28);   // 以 2026-09-28 作为"今天"
+let cur = new Date(2026, 8, 28);
+
+function fmtDate() {
+  const y = cur.getFullYear(), m = String(cur.getMonth() + 1).padStart(2, '0');
+  return period === 'day'
+    ? `${y}-${m}-${String(cur.getDate()).padStart(2, '0')}`
+    : `${y}-${m}`;
+}
+function isLatest() {
+  return period === 'day'
+    ? cur.getTime() === TODAY.getTime()
+    : (cur.getFullYear() === TODAY.getFullYear() && cur.getMonth() === TODAY.getMonth());
+}
+function renderDate() { dateText.textContent = fmtDate(); dateNext.disabled = isLatest(); }
+
+function stepDate(dir) {
+  if (dir > 0 && isLatest()) return;   // 已是最新周期，> 置灰
+  if (period === 'day') cur.setDate(cur.getDate() + dir);
+  else cur.setMonth(cur.getMonth() + dir);
+  renderDate();
+}
+document.getElementById('datePrev').addEventListener('click', () => stepDate(-1));
+dateNext.addEventListener('click', () => stepDate(1));
+
+// 权属切换
+document.getElementById('ownerSeg').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  document.querySelectorAll('#ownerSeg button').forEach(b => b.classList.toggle('active', b === btn));
+});
+
+/* ================= 月度迷你趋势图（固定折线形态） ================= */
+const miniCharts = {};
+function initMiniCharts() {
+  document.querySelectorAll('.mini-chart').forEach(el => {
+    const key = el.dataset.trend;
+    if (miniCharts[key]) { miniCharts[key].resize(); return; }
+    const cfg = METRIC_TREND[key], t = TRENDS[key];
+    const chart = echarts.init(el);
+    const series = [{
+      type: 'line', data: t.vals, showSymbol: false, smooth: true,
+      lineStyle: { color: '#35c8ff', width: 1.5 },
+      areaStyle: key === 'oil' ? { color: 'rgba(53, 200, 255, .15)' } : undefined
+    }];
+    if (t.refs.length) series.push({
+      type: 'line', data: t.refs, showSymbol: false, smooth: true,
+      lineStyle: { color: cfg.refColor, width: 1, type: 'dashed' }
+    });
+    chart.setOption({
+      grid: { left: 2, right: 4, top: 6, bottom: 2 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: '#0f2c5c', borderColor: '#2f6cc4', textStyle: { color: '#fff', fontSize: 12 },
+        axisPointer: { type: 'line', lineStyle: { color: '#2f6cc4' } },
+        formatter(ps) {
+          let s = `日期: ${ps[0].axisValue}<br/>当前值: ${ps[0].value}${cfg.unit}`;
+          if (ps[1]) s += `<br/>参考值: ${ps[1].value}${cfg.unit}`;
+          return s;
+        }
+      },
+      xAxis: { type: 'category', data: t.dates, show: false, boundaryGap: false },
+      yAxis: { type: 'value', show: false, scale: true },
+      series
+    });
+    miniCharts[key] = chart;
+  });
+}
+function applyModes() {
+  // 图表形态固定（日=进度条、月=趋势折线），此处仅负责隐藏卡恢复显示后的尺寸同步
+  try {
+    Object.values(distCharts).forEach(c => c.resize());
+    Object.values(miniCharts).forEach(c => c.resize());
+  } catch (err) { console.error(err); }
+}
+
+/* ================= 日 / 月维度切换 ================= */
+function applyPeriod(p) {
+  period = p;
+  screenEl.classList.toggle('month', p === 'month');
+  document.querySelectorAll('#periodSeg button').forEach(b => b.classList.toggle('active', b.dataset.v === p));
+  renderDate();
+  const d = PERIOD_DATA[p];
+  document.getElementById('onlineVal').textContent = d.online;
+  document.getElementById('offlineVal').textContent = d.offline;
+  document.getElementById('alarmVal').innerHTML = `${d.alarm}<small>条</small>`;
+  document.getElementById('warnBody').innerHTML = d.warns.map(w =>
+    `<tr><td>${w.no}</td><td>${w.type}</td><td class="num"><span class="cnt-bar" style="width:${Math.round(w.ratio * 100)}%"></span></td></tr>`
+  ).join('');
+  document.getElementById('warnEmpty').style.display = d.warns.length ? 'none' : 'flex';
+  if (p === 'month') requestAnimationFrame(initMiniCharts);
+}
+document.getElementById('periodSeg').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  applyPeriod(btn.dataset.v);
+  saveBoard();
+});
+
+// 初始渲染（日维度）
+applyPeriod('day');
+
+/* ================= 卡片槽位拖拽互换 + 版式持久化 ================= */
+const sides = document.querySelectorAll('.side');
+function cardKeyOf(card) {
+  if (card.dataset.key) return card.dataset.key;
+  let k;
+  if (card.classList.contains('sum-card')) {
+    const t = card.querySelector('.card-hd').textContent;
+    k = t.includes('设备统计') ? 'devStat' : t.includes('在线') ? 'online' : t.includes('闲置') ? 'idle' : 'unavail';
+  } else if (card.classList.contains('metric')) k = card.querySelector('.mini-chart').dataset.trend;
+  else if (card.querySelector('#chartType')) k = 'typeDist';
+  else if (card.querySelector('#chartStatus')) k = 'statusDist';
+  else if (card.querySelector('#chartWH')) k = 'workhour';
+  else if (card.classList.contains('mileage-card')) k = 'mileage';
+  else if (card.classList.contains('oil-card')) k = 'oil';
+  else if (card.classList.contains('alarm-card')) k = 'alarm';
+  else k = 'warn';
+  card.dataset.key = k;
+  return k;
+}
+try { document.querySelectorAll('.card').forEach(cardKeyOf); } catch (err) { console.error(err); }
+const cardByKey = k => document.querySelector(`.card[data-key="${k}"]`);
+const specOf = c => c.classList.contains('sum-card') ? 'top' : (c.classList.contains('donut-card') || c.classList.contains('status-card')) ? 'big' : 'std';
+const presetLayout = () => ({ top: [...preset().top], left: [...preset().left], right: [...preset().right] });
+function getLayout() {
+  const vis = c => c.style.display !== 'none';
+  return {
+    top: [...document.querySelectorAll('.top-slots .card')].filter(vis).map(c => c.dataset.key),
+    left: [...sides[0].querySelectorAll(':scope > .card')].filter(vis).map(c => c.dataset.key),
+    right: [...sides[1].querySelectorAll(':scope > .card')].filter(vis).map(c => c.dataset.key)
+  };
+}
+function applyLayout(L) {
+  const topBox = document.querySelector('.top-slots');
+  L.top.forEach(k => topBox.appendChild(cardByKey(k)));
+  L.left.forEach(k => sides[0].appendChild(cardByKey(k)));
+  L.right.forEach(k => sides[1].appendChild(cardByKey(k)));
+  // 侧栏卡片按单位占高：大卡/预警 = 2 单位
+  document.querySelectorAll('.side > .card[data-key]').forEach(c => {
+    c.classList.toggle('unit2', unitOf(c.dataset.key) === 2);
+  });
+  // 未被布局引用的组件隐藏（自定义看板允许勾选子集）
+  document.querySelectorAll('.card[data-key]').forEach(c => {
+    const used = L.top.includes(c.dataset.key) || L.left.includes(c.dataset.key) || L.right.includes(c.dataset.key);
+    c.style.display = used ? '' : 'none';
+  });
+  // 区域内无组件时整个区域收起，地图扩展填充
+  document.querySelector('.top-slots').style.display = L.top.length ? '' : 'none';
+  sides[0].style.display = L.left.length ? '' : 'none';
+  sides[1].style.display = L.right.length ? '' : 'none';
+  // 卡片显隐改变了地图容器尺寸，通知 Leaflet 重新量取并填充
+  try { if (window.map) map.invalidateSize(); } catch (err) {}
+}
+let dragCard = null;
+document.addEventListener('mousedown', e => {
+  const hd = e.target.closest('.card-hd');
+  document.querySelectorAll('.card').forEach(c => c.draggable = false);
+  if (hd && !e.target.closest('button')) hd.closest('.card').draggable = true;   // 仅标题栏可拖起
+});
+document.addEventListener('dragstart', e => {
+  const card = e.target.closest('.card'); if (!card || !card.draggable) return;
+  dragCard = card; card.classList.add('dragging');
+  try { e.dataTransfer.setData('text/plain', card.dataset.key); } catch (err) {}
+});
+document.addEventListener('dragover', e => {
+  const card = e.target.closest('.card');
+  document.querySelectorAll('.card.drop-hint').forEach(c => c.classList.remove('drop-hint'));
+  if (!card || !dragCard || card === dragCard || specOf(card) !== specOf(dragCard)) return;
+  e.preventDefault();   // 同规格槽位组内才允许放置
+  card.classList.add('drop-hint');
+});
+document.addEventListener('drop', e => {
+  const card = e.target.closest('.card');
+  if (!card || !dragCard || card === dragCard || specOf(card) !== specOf(dragCard)) return;
+  e.preventDefault();
+  const ph = document.createElement('div');
+  dragCard.parentNode.insertBefore(ph, dragCard);
+  card.parentNode.insertBefore(dragCard, card);
+  ph.parentNode.insertBefore(card, ph);
+  ph.remove();
+  saveBoard();   // 释放互换后自动保存（版式写入统一看板配置）
+});
+document.addEventListener('dragend', () => {
+  if (dragCard) dragCard.classList.remove('dragging');
+  dragCard = null;
+  document.querySelectorAll('.card.drop-hint').forEach(c => c.classList.remove('drop-hint'));
+});
+
+/* Toast 提示 */
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+/* ================= 中央地图：深色底图 + 聚合/胶囊点位 + 设备详情弹窗 ================= */
+if (!window.L) {
+  console.error('Leaflet 库未加载成功，地图功能降级为空底图');
+} else {
+const map = L.map('mapArea', { center: [-1.6, 121.4], zoom: 6, zoomControl: false, attributionControl: false });
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 16, className: 'map-tiles'
+}).addTo(map);
+
+const pinSvg = c => `<svg viewBox="0 0 24 24" fill="${c}"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5z"/></svg>`;
+const MAP_MARKERS = [
+  { type: 'ring', size: 'big', val: 135, state: '离线', devType: '自卸卡车', lat: -1.05, lng: 120.75 },
+  { type: 'ring', size: 'mid', val: 93,  state: '怠速', devType: '挖掘机',   lat: -0.75, lng: 121.55 },
+  { type: 'dot',  val: 4,  state: '停车', devType: '压路机',   lat: -0.55, lng: 121.75 },
+  { type: 'ring', size: 'mid', val: 74,  state: '工作', devType: '自卸卡车', lat: -0.65, lng: 121.95 },
+  { type: 'dot',  val: 3,  state: '上电', devType: '平地机',   lat: -0.45, lng: 122.45 },
+  { type: 'pin',  label: 'TI-DT 761',      online: false, state: '离线', devType: '自装卸车', lat: 0.55,  lng: 120.4  },
+  { type: 'pin',  label: 'TI-DT 883',      online: true,  state: '工作', devType: '挖掘机',   lat: 0.95,  lng: 121.85 },
+  { type: 'pin',  label: 'TI-DT 62',       online: true,  state: '怠速', devType: '压路机',   lat: -0.35, lng: 121.45 },
+  { type: 'pin',  label: 'TI-E 3028 1031', online: false, state: '离线', devType: '自卸卡车', lat: -1.45, lng: 122.65 }
+];
+function popupHtml(m) {
+  const d = {
+    code: 'HRZX2431014498',
+    selfNo: m.label || 'TI-DT 532',
+    plate: '-',
+    type: '自装卸车',
+    online: m.type === 'pin' ? (m.online ? '在线' : '离线') : '离线',
+    runState: m.state || '离线',
+    time: '2026-09-28 17:20:00',
+    owner: '自有',
+    project: 'Lameruru',
+    org: 'TIRAN INDONESIA',
+    addr: 'Q7FV+F8, Landawe Utama, Wiwirano, North Konawe Regency, South East Sulawesi, 印度尼西亚'
+  };
+  return `
+  <div class="pp-hd"><span class="sany">SANY</span><b>${d.selfNo}</b></div>
+  <div class="pp-bd"><div class="pp-grid">
+    <div><label>设备编号</label><b>${d.code}</b></div>
+    <div><label>自编号</label><b>${d.selfNo}</b></div>
+    <div><label>车牌号</label><b>${d.plate}</b></div>
+    <div><label>设备类型</label><b>${d.type}</b></div>
+    <div><label>在线状态</label><b>${d.online}</b></div>
+    <div><label>当前运行状态</label><b>${d.runState}</b></div>
+    <div class="full"><label>数据更新时间</label><b>${d.time}</b></div>
+    <div><label>设备归属类型</label><b>${d.owner}</b></div>
+    <div><label>所在项目</label><b>${d.project}</b></div>
+    <div class="full"><label>所属组织</label><b>${d.org}</b></div>
+    <div class="full"><label>所在地址</label><b>${d.addr}</b></div>
+  </div></div>`;
+}
+MAP_MARKERS.forEach(m => {
+  const popupOpts = { className: 'dev-popup', closeButton: true, maxWidth: 320, autoPan: true };
+  if (m.type === 'pin') {
+    const html = `<div class="pin-m"><div class="pin">${pinSvg(m.online ? '#18a85c' : '#e5484d')}${m.label}</div></div>`;
+    L.marker([m.lat, m.lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }) })
+      .addTo(map)
+      .bindPopup(popupHtml(m), { ...popupOpts, offset: [0, -28] });   // 弹窗位于胶囊上方
+  } else {
+    const cls = m.type === 'ring' ? `cluster ring${m.size === 'mid' ? ' mid' : ''}` : 'cluster dot';
+    const size = m.type === 'ring' ? (m.size === 'mid' ? 44 : 52) : 26;
+    L.marker([m.lat, m.lng], { icon: L.divIcon({ className: '', html: `<div class="${cls}">${m.val}</div>`, iconSize: [size, size] }) })
+      .addTo(map)
+      .bindPopup(popupHtml(m), { ...popupOpts, offset: [0, -Math.round(size / 2) - 4] });
+  }
+});
+}   // end if (window.L)
+
+// 高级搜索浮层
+const filterBtn = document.getElementById('filterBtn');
+const filterPanel = document.getElementById('filterPanel');
+filterBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  filterPanel.classList.toggle('show');
+  filterBtn.classList.toggle('on');
+});
+filterPanel.addEventListener('click', e => e.stopPropagation());
+document.addEventListener('click', () => {
+  filterPanel.classList.remove('show');
+  filterBtn.classList.remove('on');
+  document.getElementById('typeDropdown').classList.remove('show');
+  if (typeof boardMenu !== 'undefined') boardMenu.classList.remove('show');
+});
+
+// 设备类型下拉
+const typeSelect = document.getElementById('typeSelect');
+const typeInput = document.getElementById('typeInput');
+const typeDropdown = document.getElementById('typeDropdown');
+typeSelect.addEventListener('click', () => typeDropdown.classList.toggle('show'));
+typeDropdown.addEventListener('click', e => {
+  const opt = e.target.closest('.opt'); if (!opt) return;
+  typeDropdown.querySelectorAll('.opt').forEach(o => o.classList.toggle('selected', o === opt));
+  typeInput.value = opt.textContent;
+  typeInput.classList.remove('ph');
+  typeDropdown.classList.remove('show');
+});
+
+// 全屏
+document.getElementById('fullBtn').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+});
+
+/* ================= 角色看板切换：应用预设/自定义版式 + 图表形态 + 默认时间维度 ================= */
+const boardBtn = document.getElementById('boardBtn');
+const boardMenu = document.getElementById('boardMenu');
+function updateBoardBtn() {
+  const c = curCustom();
+  const nm = (c && c.name) || preset().name;
+  document.getElementById('boardName').textContent = nm;
+  boardMenu.querySelectorAll('button[data-role]').forEach(b => {
+    b.innerHTML = ROLE_PRESETS[b.dataset.role].name
+      + '<span class="edit-tag" data-edit="' + b.dataset.role + '">编辑</span>';
+  });
+}
+function applyRole(role, silent) {
+  board.role = role;
+  const c = curCustom();
+  const p = preset();
+  applyLayout((c && c.layout) ? c.layout : presetLayout());
+  applyPeriod((c && c.period) || p.period);
+  applyModes();
+  updateBoardBtn();
+  if (!silent) showToast(`已切换至「${p.name}」` + (c && c.layout ? '（含该看板的自定义布局）' : ''));
+}
+boardBtn.addEventListener('click', e => { e.stopPropagation(); boardMenu.classList.toggle('show'); });
+boardMenu.addEventListener('click', e => {
+  const edit = e.target.closest('[data-edit]');   // 点击菜单项右侧「编辑」：切换到该看板并打开编辑器
+  if (edit) {
+    boardMenu.classList.remove('show');
+    if (board.role !== edit.dataset.edit) applyRole(edit.dataset.edit, true);
+    openBoardEditor();
+    return;
+  }
+  const btn = e.target.closest('button[data-role]'); if (!btn) return;
+  boardMenu.classList.remove('show');
+  if (btn.dataset.role !== board.role) applyRole(btn.dataset.role);
+});
+
+/* ================= 自定义看板编辑器（组件仅限现有 13 个，勾选 + 区域内拖拽排序） ================= */
+const COMPONENTS = [
+  { k: 'devStat', n: '设备统计', spec: 'top' }, { k: 'online', n: '在线状态', spec: 'top' },
+  { k: 'idle', n: '闲置设备', spec: 'top' }, { k: 'unavail', n: '不可用设备', spec: 'top' },
+  { k: 'chuqin', n: '出勤率', spec: 'std' }, { k: 'liyong', n: '利用率', spec: 'std' },
+  { k: 'ritai', n: '日台均工时', spec: 'std' }, { k: 'youxiao', n: '有效工时比', spec: 'std' },
+  { k: 'oil', n: '油耗统计', spec: 'std' }, { k: 'mileage', n: '里程统计', spec: 'std' }, { k: 'alarm', n: '告警总数', spec: 'std' }, { k: 'warn', n: '预警信息', spec: 'std' },
+  { k: 'typeDist', n: '设备类型分布', spec: 'big' }, { k: 'statusDist', n: '当前运行状态', spec: 'big' }, { k: 'workhour', n: '工时占比', spec: 'big' }
+];
+const compOf = k => COMPONENTS.find(c => c.k === k);
+const specOfKey = k => compOf(k).spec;
+const editorMask = document.getElementById('editorMask');
+const editorBody = document.getElementById('editorBody');
+let editorState = null;   // { name, top:[], left:[], right:[] }，数组顺序即看板显示顺序
+let dragChk = null;
+
+function renderEditor() {
+  document.getElementById('editorTitle').textContent = preset().name + ' · 组件配置';
+  const inUse = k => editorState.top.includes(k) || editorState.left.includes(k) || editorState.right.includes(k);
+  const item = (k, area) => {
+    const c = compOf(k), checked = editorState[area].includes(k);
+    const usedOther = !checked && inUse(k);
+    const dis = usedOther;
+    const tag = usedOther ? '<em class="mut">已在其他区域</em>' : specOfKey(k) === 'big' ? '<em>2单位</em>' : k === 'warn' ? '<em>2单位</em>' : '';
+    return `<label class="ed-chk ${checked ? 'on' : ''} ${dis ? 'dis' : ''}" data-k="${k}" data-area="${area}" ${checked ? 'draggable="true"' : ''} title="${checked ? '已勾选：可拖拽排序' : ''}">
+      <input type="checkbox" ${checked ? 'checked' : ''} ${dis ? 'disabled' : ''}><i></i>${c.n}${tag}</label>`;
+  };
+  const ordered = area => {
+    const all = COMPONENTS.filter(c => (area === 'top' ? c.spec === 'top' : c.spec !== 'top')).map(c => c.k);
+    return [...editorState[area], ...all.filter(k => !editorState[area].includes(k))];
+  };
+  editorBody.innerHTML = `
+    <div class="ed-name-row"><label>看板名称</label><input type="text" id="edName" maxlength="12" value="${editorState.name}"></div>
+    <div class="ed-sec"><div class="ed-sec-t">顶部区域（已选 ${editorState.top.length}/${AREA_UNITS.top}）· 已勾选组件可拖拽排序</div>
+      <div class="ed-grid">${ordered('top').map(k => item(k, 'top')).join('')}</div></div>
+    <div class="ed-sec"><div class="ed-sec-t">左侧区域（已用 ${unitsOf(editorState.left)}/${AREA_UNITS.left} 单位）</div>
+      <div class="ed-grid">${ordered('left').map(k => item(k, 'left')).join('')}</div></div>
+    <div class="ed-sec"><div class="ed-sec-t">右侧区域（已用 ${unitsOf(editorState.right)}/${AREA_UNITS.right} 单位）</div>
+      <div class="ed-grid">${ordered('right').map(k => item(k, 'right')).join('')}</div></div>`;
+}
+editorBody.addEventListener('click', e => {
+  const chk = e.target.closest('.ed-chk'); if (!chk || editorState === null) return;
+  const k = chk.dataset.k, area = chk.dataset.area, arr = editorState[area];
+  const i = arr.indexOf(k);
+  if (i !== -1) arr.splice(i, 1);
+  else {
+    if (unitsOf(arr) + unitOf(k) > AREA_UNITS[area]) {
+      showToast(area === 'top' ? '顶部区域最多勾选 4 个组件' : `该区域容量不足：共 ${AREA_UNITS[area]} 单位，已用 ${unitsOf(arr)}，该组件占 ${unitOf(k)} 单位`);
+      return;
+    }
+    arr.push(k);
+  }
+  renderEditor();
+});
+editorBody.addEventListener('input', e => { if (e.target.id === 'edName') editorState.name = e.target.value; });
+
+/* 编辑器内拖拽：仅限同区域内排序 */
+editorBody.addEventListener('dragstart', e => {
+  const chk = e.target.closest('.ed-chk.on'); if (!chk) return;
+  dragChk = chk; chk.classList.add('dragging');
+  try { e.dataTransfer.setData('text/plain', chk.dataset.k); } catch (err) {}
+});
+editorBody.addEventListener('dragover', e => {
+  document.querySelectorAll('.ed-chk.hint').forEach(c => c.classList.remove('hint'));
+  if (!dragChk) return;
+  const chk = e.target.closest('.ed-chk.on');
+  if (!chk || chk.dataset.area !== dragChk.dataset.area || chk === dragChk) return;   // 仅限同区域内
+  e.preventDefault();
+  chk.classList.add('hint');
+});
+editorBody.addEventListener('drop', e => {
+  document.querySelectorAll('.ed-chk.hint').forEach(c => c.classList.remove('hint'));
+  const chk = e.target.closest('.ed-chk.on'); if (!chk || !dragChk || chk === dragChk) { dragChk = null; return; }
+  if (chk.dataset.area !== dragChk.dataset.area) { dragChk = null; return; }   // 禁止跨区域
+  e.preventDefault();
+  const arr = editorState[dragChk.dataset.area];
+  const i = arr.indexOf(dragChk.dataset.k); if (i === -1) { dragChk = null; return; }
+  let j = arr.indexOf(chk.dataset.k);
+  if (i < j) j -= 1;
+  arr.splice(j, 0, arr.splice(i, 1)[0]);
+  dragChk = null;
+  renderEditor();
+});
+editorBody.addEventListener('dragend', () => {
+  dragChk = null;
+  document.querySelectorAll('.ed-chk.dragging, .ed-chk.hint').forEach(c => c.classList.remove('dragging', 'hint'));
+});
+function openBoardEditor() {
+  try {
+    const c = curCustom();   // 编辑当前激活的看板（其自定义优先，否则以预设为基础）
+    const L = (c && c.layout) ? c.layout : presetLayout();
+    editorState = {
+      name: (c && c.name) || preset().name,
+      top: [...L.top], left: [...L.left], right: [...L.right]
+    };
+    renderEditor();
+    editorMask.classList.add('show');
+  } catch (err) {
+    console.error(err);
+    showToast('编辑器打开失败：' + err.message);
+  }
+}
+document.getElementById('editBoardBtn').addEventListener('click', e => {
+  e.stopPropagation(); boardMenu.classList.remove('show');
+  openBoardEditor();
+});
+document.getElementById('editorClose').addEventListener('click', () => editorMask.classList.remove('show'));
+document.getElementById('editorDone').addEventListener('click', () => {
+  const layout = { top: [...editorState.top], left: [...editorState.left], right: [...editorState.right] };
+  if (!board.customs[board.role]) board.customs[board.role] = {};
+  const c = board.customs[board.role];
+  c.name = editorState.name.trim() || '自定义看板';
+  c.layout = layout;
+  c.period = period;
+  applyLayout(layout);
+  applyModes();
+  updateBoardBtn();
+  editorMask.classList.remove('show');
+  showToast(`「${c.name}」配置已应用`);
+});
+try { applyRole(board.role, true); }   // 启动：应用当前角色看板（该角色的自定义优先，否则预设）
+catch (err) {
+  console.error(err);
+  try { applyPeriod('day'); showToast('看板配置异常已回退默认：' + err.message); } catch (e) {}
+}
+</script>
+</body>
+</html>
