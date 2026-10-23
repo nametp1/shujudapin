@@ -2,7 +2,7 @@
 <!--
   数据大屏（Sanvist / Mysany 自研迁移版）— 单文件实现
   ─ 技术栈：原生 HTML/CSS/JS + ECharts 5、Leaflet 1.9（均走 jsdelivr CDN）
-  ─ 功能：日/月双形态（日=进度条数值卡、月=迷你趋势折线）、4 套角色看板预设（兜底=全局管理）+ 看板组件编辑器
+  ─ 功能：日/月双形态（日=进度条数值卡、月=迷你趋势折线）、默认看板「数据大屏」+ 看板组件编辑器（自定义）
           （组件勾选/容量校验/区域内拖拽排序编辑器）、卡片标题栏拖拽互换、恢复默认排版、
           中央深色底图（Esri Dark Gray）+ 聚合圆环/胶囊点位 + 设备详情弹窗、高级搜索浮层
   ─ 配置持久化：localStorage['dash_board']（各看板独立的版式与时间维度，图表形态固定不可切换）
@@ -58,7 +58,30 @@
   .date-picker { display: flex; align-items: center; height: 26px; border: 1px solid #24549a; border-radius: 4px; background: rgba(13, 35, 74, .8); overflow: hidden; }
   .date-picker button { width: 26px; height: 100%; color: #9cc4ff; font-size: 13px; }
   .date-picker button:disabled { color: #46618c; cursor: not-allowed; }
-  .date-picker .date-text { min-width: 96px; text-align: center; font-size: 13px; color: #e8f1ff; }
+  .date-picker .date-text { min-width: 96px; text-align: center; font-size: 13px; color: #e8f1ff; white-space: nowrap; cursor: pointer; }
+  .date-picker .date-text.wk { font-size: 12px; }
+
+  /* ===== 日历选择器（日 / 周 / 月共用） ===== */
+  .date-wrap { position: relative; }
+  .date-pop { position: absolute; left: 0; top: 32px; z-index: 320; width: 340px; background: linear-gradient(180deg, #134b92, #0b2f63); border: 1px solid #2f6cc4; border-radius: 8px; box-shadow: 0 14px 34px rgba(0, 0, 0, .6); display: none; }
+  .date-pop.show { display: block; }
+  .dp-hd { display: flex; align-items: center; padding: 10px 12px; border-bottom: 1px solid rgba(90, 150, 230, .35); }
+  .dp-hd button { width: 26px; height: 24px; color: #cfe0f5; background: none; border: none; font-size: 14px; cursor: pointer; }
+  .dp-hd button:disabled { color: #46618c; cursor: not-allowed; }
+  .dp-hd .ttl { flex: 1; text-align: center; font-size: 16px; font-weight: 600; color: #fff; }
+  .dp-week { display: grid; grid-template-columns: repeat(7, 1fr); padding: 8px 10px 2px; font-size: 13px; color: #bcd3ef; text-align: center; }
+  .dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; padding: 4px 10px 10px; }
+  .dp-cell { height: 34px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #e8f1ff; border-radius: 4px; cursor: pointer; }
+  .dp-cell:hover { background: rgba(53, 200, 255, .16); }
+  .dp-cell.dim { color: #6a86a8; }
+  .dp-cell.today { background: #e5261f; color: #fff; font-weight: 700; }
+  .dp-cell.sel { box-shadow: inset 0 0 0 1px #e5261f; }
+  .dp-cell.dis { color: #3f5878; cursor: not-allowed; }
+  .dp-cell.dis:hover { background: none; }
+  .dp-months { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 12px 10px 14px; }
+  .dp-months .dp-cell { height: 40px; font-size: 13px; }
+  .dp-ft { border-top: 1px solid rgba(90, 150, 230, .35); text-align: center; padding: 9px 0; font-size: 15px; color: #35c8ff; cursor: pointer; }
+  .dp-ft:hover { background: rgba(53, 200, 255, .1); }
 
   .owner-switch { display: flex; gap: 4px; background: rgba(13, 35, 74, .8); border: 1px solid #24549a; border-radius: 15px; padding: 3px; }
   .owner-switch button { height: 22px; padding: 0 12px; font-size: 13px; color: #9db8dc; border-radius: 12px; }
@@ -109,8 +132,9 @@
   .trend { font-size: 12px; font-weight: 700; }
   .trend.up { color: #28e07c; }
   .trend.down { color: #ff5b5b; }
-  .day-only, .month-only { display: none !important; }
-  #screen:not(.month) .day-only { display: flex !important; }
+  .day-only, .month-only, .week-only { display: none !important; }
+  #screen:not(.month):not(.week) .day-only { display: flex !important; }
+  #screen.week .week-only { display: flex !important; }
   #screen.month .month-only { display: flex !important; }
 
   /* 左上角看板气泡引导（带指向箭头） */
@@ -123,16 +147,25 @@
   .board-tip .bt button { height: 26px; padding: 0 18px; border-radius: 5px; font-size: 12px; background: linear-gradient(180deg, #1e6fff, #1252d8); color: #fff; cursor: pointer; }
   .bar.cyan .fill { background: linear-gradient(90deg, #0e9cb4, #35e0f2); }
 
-  /* ===== 日 / 月维度切换 ===== */
+  /* ===== 日 / 周 / 月维度切换 ===== */
   .day-view, .month-view { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-  #screen.month .day-view { display: none; }
-  #screen:not(.month) .month-view { display: none; }
-  #screen.month .card-hd .tag { display: none; }
+  #screen.month .day-view, #screen.week .day-view { display: none; }
+  #screen:not(.month):not(.week) .month-view { display: none; }
+  #screen.month .card-hd .tag, #screen.week .card-hd .tag { display: none; }
   .month-view { flex-direction: row; gap: 8px; }
   .month-view .m-left { flex: none; width: 44%; display: flex; flex-direction: column; justify-content: center; }
   .month-view .m-left .val-row { flex-wrap: wrap; gap: 6px; }
   .month-view .mini-chart { flex: 1; min-width: 0; min-height: 0; }
   .cnt-bar { display: inline-block; height: 10px; vertical-align: middle; border-radius: 2px; background: linear-gradient(90deg, #e5261f, #ff9a3d); box-shadow: 0 0 6px rgba(229, 60, 30, .55); }
+
+  /* ===== 预警信息表（斑马纹 + 序号描色 + 次数彩条内嵌数字） ===== */
+  .warn-card .warn-table th { color: #d5e4f8; font-weight: 600; }
+  .warn-card .warn-table th.num { color: #35c8ff; font-weight: 700; width: 108px; }
+  .warn-card .warn-table tbody tr:nth-child(odd) td { background: rgba(38, 88, 158, .28); }
+  .warn-card .warn-table tbody tr:hover td { background: rgba(53, 200, 255, .14); }
+  .warn-card .warn-table .no { color: #ffc93c; font-weight: 700; }
+  .warn-track { display: block; height: 16px; border-radius: 3px; background: rgba(30, 90, 190, .55); overflow: hidden; }
+  .warn-track i { display: flex; align-items: center; justify-content: flex-end; height: 100%; min-width: 24px; padding-right: 5px; border-radius: 3px; font-size: 12px; font-style: normal; font-weight: 700; color: #fff; background: linear-gradient(90deg, #e5261f, #ff9a3d); box-shadow: 0 0 8px rgba(229, 60, 30, .45); }
 
   /* ===== 环形图卡（设备类型分布 / 当前运行状态） ===== */
   .donut-card { flex: 1; min-height: 0; }
@@ -230,6 +263,30 @@
   .warn-table td { padding: 7px 6px; color: #c6d9f2; border-bottom: 1px solid rgba(80, 140, 220, .12); }
   .warn-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #5d7699; font-size: 13px; }
 
+  /* ===== 排行榜卡（2 单位） ===== */
+  .rank-card { flex: 1; min-height: 0; }
+  .rank-card .card-bd { padding: 2px 6px 4px; }
+  .rank-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  .rank-scroll::-webkit-scrollbar { width: 5px; }
+  .rank-scroll::-webkit-scrollbar-thumb { background: rgba(53, 200, 255, .45); border-radius: 3px; }
+  .rank-scroll::-webkit-scrollbar-thumb:hover { background: rgba(53, 200, 255, .7); }
+  .rank-scroll::-webkit-scrollbar-track { background: rgba(13, 35, 74, .55); }
+  .rank-table thead th { position: sticky; top: 0; z-index: 1; background: #10315f; }
+  .rank-sel { height: 22px; padding: 0 4px; font-size: 11px; color: #cfe0f5; background: rgba(20, 55, 110, .7); border: 1px solid #24549a; border-radius: 4px; outline: none; cursor: pointer; }
+  .rank-sel:hover { border-color: #3d8bff; }
+  .rank-table td { padding: 5px 6px; }
+  .rank-table .rk-dev { color: #e8f1ff; white-space: nowrap; overflow: hidden; }
+  .rank-table .rk-bar { width: 34%; }
+  .rk-bar i { display: block; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #1252d8, #35c8ff); box-shadow: 0 0 6px rgba(53, 200, 255, .45); }
+  .rank-table .num { color: #4da3ff; white-space: nowrap; }
+  .rank-table tbody tr { cursor: pointer; }
+  .rank-table tbody tr:hover td { background: rgba(30, 111, 255, .12); }
+  .rank-table tbody tr.on td { background: rgba(53, 200, 255, .16); }
+  .rk-medal { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 700; color: #1b2432; }
+  .rk-medal.g1 { background: linear-gradient(180deg, #ffe27a, #e0a800); box-shadow: 0 0 6px rgba(224, 168, 0, .6); }
+  .rk-medal.g2 { background: linear-gradient(180deg, #e6eef8, #adbccd); box-shadow: 0 0 6px rgba(173, 188, 205, .5); }
+  .rk-medal.g3 { background: linear-gradient(180deg, #f0b98a, #c07a3e); box-shadow: 0 0 6px rgba(192, 122, 62, .5); }
+
   /* 右侧栏高度分配 */
   .status-card { flex: 2 1 0; min-height: 0; }
 
@@ -239,9 +296,6 @@
 
   /* ===== 拖拽 / Toast / 角色看板 / 编辑器 ===== */
   #screen.month .card-hd .tag { display: none; }
-  .card[draggable="true"] .card-hd { cursor: move; }
-  .card.dragging { opacity: .3; }
-  .card.drop-hint { outline: 2px dashed #3d8bff; outline-offset: -2px; }
   .toast { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%) translateY(20px); z-index: 210; background: rgba(13, 35, 74, .95); border: 1px solid #2f6cc4; border-radius: 6px; padding: 8px 20px; font-size: 13px; color: #fff; opacity: 0; pointer-events: none; transition: all .25s; }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .board-switch { position: relative; }
@@ -252,6 +306,25 @@
   .board-menu button:hover { background: #2f6cc4; }
   .board-menu button .edit-tag { float: right; font-size: 10px; color: #9cc4ff; border: 1px solid #2f6cc4; border-radius: 3px; padding: 1px 6px; margin-top: 6px; margin-left: 6px; }
   .board-menu button .edit-tag:hover { background: #1e6fff; color: #fff; }
+  .board-menu button.on { background: rgba(30, 111, 255, .3); color: #fff; }
+  .board-menu button .bico { float: right; margin: 7px 0 0 6px; padding: 0 3px; font-size: 12px; line-height: 1; color: #8fb4e6; cursor: pointer; }
+  .board-menu button .bico:hover { color: #fff; }
+  .board-menu button .bico.del { font-size: 11px; }
+  .board-menu button .bico.del:hover { color: #ff6b6b; }
+
+  /* ===== 删除看板二次确认弹窗 ===== */
+  .modal-mask { position: absolute; inset: 0; z-index: 360; background: rgba(0, 0, 0, .55); display: none; align-items: center; justify-content: center; }
+  .modal-mask.show { display: flex; }
+  .modal { width: 380px; padding: 22px 24px; text-align: center; background: linear-gradient(180deg, #16386f, #102c5c); border: 1px solid #2f6cc4; border-radius: 8px; box-shadow: 0 14px 36px rgba(0, 0, 0, .6); }
+  .modal p { margin: 0 0 8px; font-size: 14px; color: #e8f1ff; line-height: 1.7; }
+  .modal p b { color: #35c8ff; }
+  .modal .sub { margin-bottom: 18px; font-size: 12px; color: #9db8dc; }
+  .modal .btns { display: flex; gap: 12px; }
+  .modal .btns button { flex: 1; height: 34px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  #delCancel { background: rgba(30, 111, 255, .15); border: 1px solid #2f6cc4; color: #cfe0f5; }
+  #delCancel:hover { background: rgba(30, 111, 255, .3); }
+  #delOk { background: linear-gradient(180deg, #e5261f, #b81b16); color: #fff; }
+  #delOk:hover { filter: brightness(1.12); }
   .board-menu-ft { border-top: 1px solid rgba(120, 170, 235, .3); }
   .board-menu-ft button { width: 100%; height: 34px; font-size: 12px; color: #9cc4ff; text-align: center; }
   .board-menu-ft button:hover { background: #2f6cc4; color: #fff; }
@@ -321,23 +394,24 @@
   <header>
     <div class="hd-left">
       <div class="board-switch">
-        <button id="boardBtn"><span id="boardName">全局管理</span><span class="arr" style="font-size:10px">▼</span></button>
+        <button id="boardBtn"><span id="boardName">数据大屏</span><span class="arr" style="font-size:10px">▼</span></button>
         <div class="board-menu" id="boardMenu">
-          <button data-role="admin">全局管理</button>
-          <button data-role="fleet">车队运营</button>
-          <button data-role="maint">维保健康</button>
-          <button data-role="personal">设备作业</button>
-          <div class="board-menu-ft"><button id="editBoardBtn">编辑看板组件</button></div>
+          <button data-role="admin">数据大屏</button>
+          <div class="board-menu-ft"><button id="newBoardBtn">＋ 新建看板</button></div>
         </div>
       </div>
       <div class="seg" id="periodSeg">
         <button class="active" data-v="day">日</button>
+        <button data-v="week" title="自然周：本周六 ~ 下周五">周</button>
         <button data-v="month">月</button>
       </div>
-      <div class="date-picker">
-        <button id="datePrev">&lt;</button>
-        <span class="date-text" id="dateText">2026-09-28</span>
-        <button id="dateNext" disabled>&gt;</button>
+      <div class="date-wrap">
+        <div class="date-picker">
+          <button id="datePrev">&lt;</button>
+          <span class="date-text" id="dateText">2026-09-28</span>
+          <button id="dateNext" disabled>&gt;</button>
+        </div>
+        <div class="date-pop" id="datePop"></div>
       </div>
     </div>
     <div class="title-wrap"><h1>数据大屏</h1></div>
@@ -539,6 +613,7 @@
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 12l4-4"/><path d="M12 7v1M17 12h-1M12 17v-1M7 12h1"/></svg>
           里程统计
           <span class="right trend up day-only" title="较上一日">↑ 28.4%</span>
+          <span class="right trend up week-only" title="较上一周">↑ 3.5%</span>
           <span class="right trend up month-only" title="较上一月">↑ 6.2%</span>
         </div>
         <div class="card-bd">
@@ -572,6 +647,31 @@
         </div>
         <div class="card-bd">
           <div class="big-val" id="alarmVal">0<small>条</small></div>
+        </div>
+      </div>
+
+      <div class="card rank-card">
+        <div class="card-hd">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+          排行榜
+          <span class="right">
+            <select class="rank-sel" id="rankType">
+              <option value="hours">工时排行</option>
+              <option value="mileage">里程排行</option>
+              <option value="elec">电耗排行</option>
+              <option value="fuel">油耗排行</option>
+              <option value="usage">利用率排行</option>
+              <option value="chuqin">出勤率排行</option>
+            </select>
+          </span>
+        </div>
+        <div class="card-bd">
+          <div class="rank-scroll">
+            <table class="warn-table rank-table">
+              <thead><tr><th style="width:44px">序号</th><th>设备</th><th class="rk-bar"></th><th class="num">数值</th></tr></thead>
+              <tbody id="rankBody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -621,9 +721,18 @@
   <div class="editor-mask" id="editorMask">
     <div class="editor-panel">
       <div class="editor-hd"><b id="editorTitle">组件配置</b><span id="editorClose">✕</span></div>
-      <p class="editor-tip">组件只能从现有 15 个指标组件中勾选（每个仅一次）：顶部最多 4 个；左/右侧容量各 6 单位，每个组件占 1 或 2 单位；已勾选组件可在本区域内拖拽排序，未勾选的组件将隐藏。</p>
+      <p class="editor-tip">组件只能从现有 16 个指标组件中勾选（每个仅一次）：顶部最多 4 个；左/右侧容量各 6 单位，每个组件占 1 或 2 单位；已勾选组件可在本区域内拖拽排序，未勾选的组件将隐藏。</p>
       <div class="editor-body" id="editorBody"></div>
       <div class="editor-ft"><button id="editorDone">应用配置</button></div>
+    </div>
+  </div>
+
+  <!-- 删除看板二次确认 -->
+  <div class="modal-mask" id="delModal">
+    <div class="modal">
+      <p>确定删除看板「<b id="delName"></b>」吗？</p>
+      <div class="sub">删除后该看板的组件组合不可恢复</div>
+      <div class="btns"><button id="delCancel">取 消</button><button id="delOk">删 除</button></div>
     </div>
   </div>
 
@@ -670,47 +779,48 @@ const statusData = [
   { name: '上电', value: 2,   itemStyle: { color: '#ffd23c' } }
 ];
 
-/* ================= 角色专属看板配置（dash_board：版式 + 时间维度） ================= */
-const ROLE_PRESETS = {
-  admin: { name: '全局管理', period: 'day',
-    top: ['devStat', 'idle', 'online', 'unavail'], left: ['chuqin', 'liyong', 'ritai', 'youxiao', 'typeDist'], right: ['statusDist', 'oil', 'mileage', 'warn'] },
-  fleet: { name: '车队运营', period: 'day',
-    top: ['online', 'devStat', 'unavail', 'idle'], left: ['chuqin', 'youxiao', 'ritai', 'liyong', 'workhour'], right: ['statusDist', 'mileage', 'oil', 'warn'] },
-  maint: { name: '维保健康', period: 'day',
-    top: ['unavail', 'online', 'idle', 'devStat'], left: ['statusDist', 'alarm', 'warn', 'ritai'], right: ['workhour', 'mileage', 'oil', 'liyong'] },
-  personal: { name: '设备作业', period: 'day',
-    top: ['online', 'unavail', 'devStat', 'idle'], left: ['ritai', 'youxiao', 'oil', 'chuqin', 'workhour'], right: ['statusDist', 'alarm', 'warn', 'mileage'] }
+/* ================= 看板配置（dash_boards：默认看板 + 最多 5 个自定义看板） ================= */
+const DEFAULT_PRESET = {
+  name: '数据大屏', period: 'day',
+  top: ['devStat', 'online', 'idle', 'unavail'],
+  left: ['chuqin', 'liyong', 'ritai', 'youxiao', 'typeDist'],
+  right: ['statusDist', 'oil', 'alarm', 'warn']
 };
-/* 预设版式版本号：ROLE_PRESETS 变更时递增，自动失效旧的自定义缓存，使新预设生效 */
-const PRESET_VERSION = 'v1.2.2';
-let board = { role: 'admin', customs: {} };
+/* 预设版式版本号：默认版式变更时递增，自动失效旧缓存 */
+const PRESET_VERSION = 'v1.3.1';
+const MAX_CUSTOM_BOARDS = 4;   // 含默认看板共 5 个
+const defaultBoard = () => ({ id: 'default', name: '数据大屏', layout: null });
+let boards = { active: 'default', list: [defaultBoard()] };
 try {
-  const s = JSON.parse(localStorage.getItem('dash_board') || 'null');
-  if (s && s.role) {
-    if (s.pv !== PRESET_VERSION) {
-      // 预设已更新：丢弃基于旧版预设保存的自定义，仅保留角色
-      board = { role: s.role, customs: {} };
-    } else {
-      board = s;
-      if (!board.customs) board.customs = {};
-      if (s.layout && !board.customs[s.role]) board.customs[s.role] = { layout: s.layout, period: s.period };
+  const s = JSON.parse(localStorage.getItem('dash_boards') || 'null');
+  if (s && Array.isArray(s.list) && s.list.length) {
+    if (s.pv === PRESET_VERSION) {
+      boards = s;
+    }
+  } else {
+    // 兼容上一版单看板缓存：把已保存的版式迁移为默认看板版式
+    const old = JSON.parse(localStorage.getItem('dash_board') || 'null');
+    if (old && old.pv === 'v1.2.4' && old.customs && old.customs.admin && old.customs.admin.layout) {
+      boards.list[0].layout = old.customs.admin.layout;
     }
   }
 } catch (e) {}
-if (!ROLE_PRESETS[board.role]) board.role = 'admin';   // 未知/旧自定义角色兜底：全局管理
-if (!board.customs) board.customs = {};
-const preset = () => ROLE_PRESETS[board.role];
-const curCustom = () => board.customs[board.role];
-/* 侧栏单位制：小卡=1 单位，大卡（typeDist/statusDist）/预警（warn）/工时占比=2 单位，每栏容量 6 */
+if (!boards.list || !boards.list.length) boards = { active: 'default', list: [defaultBoard()] };
+if (!boards.list.some(b => b.id === 'default')) boards.list.unshift(defaultBoard());
+if (!boards.list.some(b => b.id === boards.active)) boards.active = boards.list[0].id;
+const preset = () => DEFAULT_PRESET;
+const activeBoard = () => boards.list.find(b => b.id === boards.active) || boards.list[0];
+/* 侧栏单位制：小卡=1 单位，大卡（typeDist/statusDist）/预警（warn）/工时占比/排行榜=2 单位，每栏容量 6 */
 const AREA_UNITS = { top: 4, left: 6, right: 6 };
-const unitOf = k => (k === 'warn' || k === 'typeDist' || k === 'statusDist' || k === 'workhour') ? 2 : 1;
+const unitOf = k => (k === 'warn' || k === 'typeDist' || k === 'statusDist' || k === 'workhour' || k === 'rank') ? 2 : 1;
 const unitsOf = arr => arr.reduce((n, k) => n + unitOf(k), 0);
-function saveBoard() {
-  if (!board.customs) board.customs = {};
-  board.customs[board.role] = { layout: getLayout(), period };
-  board.pv = PRESET_VERSION;
-  try { localStorage.setItem('dash_board', JSON.stringify(board)); } catch (e) {}
+function saveBoards() {
+  const b = activeBoard();
+  b.layout = getLayout();
+  boards.pv = PRESET_VERSION;
+  try { localStorage.setItem('dash_boards', JSON.stringify(boards)); } catch (e) {}
 }
+function saveBoard() { saveBoards(); }
 
 /* ================= 占比卡：环形饼图（固定形态） ================= */
 const distData = { typeDist: { data: typeData, total: 315 }, statusDist: { data: statusData, total: 310 } };
@@ -777,7 +887,17 @@ const whData = [
 /* ================= 静态演示数据（日 / 月两套） ================= */
 const PERIOD_DATA = {
   day:   { online: 217, offline: 98, alarm: 0, warns: [] },
-  month: { online: 217, offline: 98, alarm: 5, warns: [{ no: 1, type: '离线', ratio: 1 }] }
+  week:  { online: 219, offline: 96, alarm: 7, warns: [
+    { no: 1, type: '发动机转速', count: 3 },
+    { no: 2, type: '离线', count: 4 }
+  ] },
+  month: { online: 217, offline: 98, alarm: 10, warns: [
+    { no: 1, type: '发动机转速', count: 3 },
+    { no: 2, type: '离线', count: 4 },
+    { no: 3, type: '油位低', count: 1 },
+    { no: 4, type: '超速', count: 2 },
+    { no: 5, type: '长时间驻车', count: 1 }
+  ] }
 };
 const METRIC_TREND = {
   chuqin:  { unit: '%', base: 62,  amp: 60, refBase: 85,  refColor: '#ffd23c' },
@@ -800,6 +920,78 @@ Object.keys(METRIC_TREND).forEach((key, i) => {
   TRENDS[key] = { dates, vals, refs };
 });
 
+/* ================= 排行榜（工时 / 里程 / 电耗 / 油耗 / 利用率，可切换） ================= */
+/* 演示数据：w 为权重，长名称设备故意排在高位，便于验证中间省略效果 */
+const RANK_DEVICES = [
+  { name: 'TI-DT 883', w: 1.18 },
+  { name: 'SDLG-L956F-2023-0087', w: 1.14 },
+  { name: 'TI-DT 761', w: 1.10 },
+  { name: 'TI-E 3028 1031', w: 1.06 },
+  { name: 'TI-DT 62', w: 1.02 },
+  { name: 'XCMG-XE215D-0417', w: 0.98 },
+  { name: 'TI-E 2087', w: 0.94 },
+  { name: 'SANY-SCC800A-2024', w: 0.90 },
+  { name: 'TI-DT 512', w: 0.86 },
+  { name: 'TI-DT 903', w: 0.82 },
+  { name: 'TI-E 3055', w: 0.78 },
+  { name: 'TI-DT 640', w: 0.74 }
+];
+const RANK_META = {
+  hours: { unit: 'h', base: 9.2, amp: 3 },
+  mileage: { unit: 'km', base: 168, amp: 60 },
+  elec: { unit: 'kWh', base: 326, amp: 120 },
+  fuel: { unit: 'L', base: 248, amp: 90 },
+  usage: { unit: '%', base: 74, amp: 22 },
+  chuqin: { unit: '%', base: 82, amp: 22 }
+};
+const RANK_DATA = {};
+Object.keys(RANK_META).forEach((k, i) => {
+  const m = RANK_META[k], rnd = seeded(11 + i * 17);
+  RANK_DATA[k] = RANK_DEVICES
+    .map(o => ({ name: o.name, val: Math.max(0, +(m.base * o.w * (0.9 + rnd() * 0.2)).toFixed(1)) }))
+    .sort((a, b) => b.val - a.val)
+    .slice(0, 10);
+});
+function rankNo(i) {
+  return i < 3
+    ? `<span class="rk-medal g${i + 1}">${i + 1}</span>`
+    : `${i + 1}`;
+}
+/* 设备名过长时中间省略：前 3 位 + .. + 后 3 位（完整名称见悬停 title） */
+function shortDev(name) {
+  return name.length > 10 ? `${name.slice(0, 3)}..${name.slice(-3)}` : name;
+}
+function renderRank(type) {
+  const key = RANK_DATA[type] ? type : 'hours';
+  const list = RANK_DATA[key], max = Math.max(...list.map(o => o.val)) || 1;
+  document.getElementById('rankBody').innerHTML = list.map((o, i) =>
+    `<tr data-dev="${o.name}"><td>${rankNo(i)}</td><td class="rk-dev" title="${o.name}">${shortDev(o.name)}</td><td class="rk-bar"><i style="width:${Math.round(o.val / max * 100)}%"></i></td><td class="num">${o.val} ${RANK_META[key].unit}</td></tr>`
+  ).join('');
+  applyRankRowHighlight();
+}
+function applyRankRowHighlight() {
+  document.querySelectorAll('#rankBody tr').forEach(tr => {
+    tr.classList.toggle('on', !!window.__rankFilter && window.__rankFilter === tr.dataset.dev);
+  });
+}
+renderRank('hours');
+document.getElementById('rankType').addEventListener('change', e => renderRank(e.target.value));
+
+/* 点击排行榜行 → 联动地图高亮该设备（再次点击或点 ✕ 取消） */
+document.getElementById('rankBody').addEventListener('click', e => {
+  const tr = e.target.closest('tr'); if (!tr) return;
+  const name = tr.dataset.dev;
+  if (typeof window.focusDevice !== 'function') { showToast('地图未加载，暂无法联动'); return; }
+  if (window.__rankFilter === name) {          // 再次点击同一行：取消联动
+    window.__rankFilter = null;
+    window.clearDeviceFocus();
+  } else {
+    if (!window.focusDevice(name)) { showToast(`「${name}」暂无地图点位`); return; }
+    window.__rankFilter = name;
+  }
+  applyRankRowHighlight();
+});
+
 /* ================= 顶部控制栏交互 ================= */
 const screenEl = document.getElementById('screen');
 const dateText = document.getElementById('dateText');
@@ -808,27 +1000,146 @@ let period = 'day';
 const TODAY = new Date(2026, 8, 28);   // 以 2026-09-28 作为"今天"
 let cur = new Date(2026, 8, 28);
 
+/* 自然周（海外口径）：周六 00:00 ~ 下周五 23:59，共 7 天
+   WEEK_START 可配置：6=周六（印尼/中东项目习惯）、0=周日（美式）、1=周一（国内/ISO） */
+const WEEK_START = 6;
+const WEEK_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+function weekStart(d) {
+  const t = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return new Date(t.getTime() - ((t.getDay() - WEEK_START + 7) % 7) * 86400000);
+}
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function weekRange(d) {
+  const s = weekStart(d);
+  return [s, new Date(s.getTime() + 6 * 86400000)];
+}
 function fmtDate() {
+  if (period === 'week') {
+    const [s, e] = weekRange(cur);
+    const md = d => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${md(s)} ${WEEK_CN[s.getDay()]} ~ ${md(e)} ${WEEK_CN[e.getDay()]}`;   // 如 09-26 周六 ~ 10-02 周五
+  }
   const y = cur.getFullYear(), m = String(cur.getMonth() + 1).padStart(2, '0');
   return period === 'day'
     ? `${y}-${m}-${String(cur.getDate()).padStart(2, '0')}`
     : `${y}-${m}`;
 }
 function isLatest() {
+  if (period === 'week') return weekStart(cur).getTime() === weekStart(TODAY).getTime();
   return period === 'day'
     ? cur.getTime() === TODAY.getTime()
     : (cur.getFullYear() === TODAY.getFullYear() && cur.getMonth() === TODAY.getMonth());
 }
-function renderDate() { dateText.textContent = fmtDate(); dateNext.disabled = isLatest(); }
+function renderDate() {
+  dateText.textContent = fmtDate();
+  dateText.classList.toggle('wk', period === 'week');
+  dateNext.disabled = isLatest();
+}
 
 function stepDate(dir) {
   if (dir > 0 && isLatest()) return;   // 已是最新周期，> 置灰
   if (period === 'day') cur.setDate(cur.getDate() + dir);
+  else if (period === 'week') {
+    const s = weekStart(cur);
+    cur = new Date(s.getTime() + dir * 7 * 86400000);   // 按自然周整周跳转
+  }
   else cur.setMonth(cur.getMonth() + dir);
   renderDate();
 }
 document.getElementById('datePrev').addEventListener('click', () => stepDate(-1));
 dateNext.addEventListener('click', () => stepDate(1));
+
+/* ================= 日历选择器（日 / 周 / 月共用，最多查询近 3 个月） ================= */
+const WEEKDAY_CN = ['日', '一', '二', '三', '四', '五', '六'];
+const datePop = document.getElementById('datePop');
+const MIN_DATE = (() => {                       // 最早可选：今天往前 3 个月
+  const d = new Date(TODAY.getTime());
+  d.setMonth(d.getMonth() - 3);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+})();
+let popMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
+
+const dayNum = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+function inRange(d) {
+  const t = dayNum(d);
+  return t >= MIN_DATE.getTime() && t <= TODAY.getTime();
+}
+function weekInRange(d) {                       // 以周起始日落在查询范围内为准（当周可选中）
+  const s = dayNum(weekStart(d));
+  return s >= MIN_DATE.getTime() && s <= TODAY.getTime();
+}
+function renderDatePop() {
+  const y = popMonth.getFullYear(), m = popMonth.getMonth();
+  const prevDis = (y < MIN_DATE.getFullYear()) || (y === MIN_DATE.getFullYear() && m <= MIN_DATE.getMonth());
+  const nextDis = (y > TODAY.getFullYear()) || (y === TODAY.getFullYear() && m >= TODAY.getMonth());
+  let body = '';
+
+  if (period === 'month') {
+    body = '<div class="dp-months">' + Array.from({ length: 12 }, (_, i) => {
+      const on = cur.getFullYear() === y && cur.getMonth() === i;
+      const minM = new Date(MIN_DATE.getFullYear(), MIN_DATE.getMonth(), 1);
+      const dis = i < minM.getMonth() && y <= minM.getFullYear() || y > TODAY.getFullYear() || (y === TODAY.getFullYear() && i > TODAY.getMonth());
+      return `<div class="dp-cell${on ? ' sel' : ''}${dis ? ' dis' : ''}" data-m="${i}">${i + 1}月</div>`;
+    }).join('') + '</div>';
+  } else {
+    const first = new Date(y, m, 1);
+    const start = new Date(y, m, 1 - first.getDay());   // 日历首列为周日（与设计稿一致）
+    const wkS = dayNum(weekStart(cur)), wkE = wkS + 6 * 86400000;
+    let cells = '';
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start.getTime() + i * 86400000);
+      const cls = ['dp-cell'];
+      if (d.getMonth() !== m) cls.push('dim');
+      if (dayNum(d) === dayNum(TODAY)) cls.push('today');
+      const on = period === 'week'
+        ? (dayNum(d) >= wkS && dayNum(d) <= wkE)
+        : dayNum(d) === dayNum(cur);
+      if (on) cls.push('sel');
+      if (period === 'week' ? !weekInRange(d) : !inRange(d)) cls.push('dis');
+      cells += `<div class="${cls.join(' ')}" data-d="${ymd(d)}">${d.getDate()}</div>`;
+    }
+    body = `<div class="dp-week">${WEEKDAY_CN.map(w => `<span>${w}</span>`).join('')}</div>`
+      + `<div class="dp-grid">${cells}</div>`;
+  }
+
+  datePop.innerHTML =
+    `<div class="dp-hd">`
+    + `<button data-nav="-12" ${prevDis ? 'disabled' : ''}>«</button>`
+    + `<button data-nav="-1" ${prevDis ? 'disabled' : ''}>‹</button>`
+    + `<span class="ttl">${y}年 ${m + 1}月</span>`
+    + `<button data-nav="1" ${nextDis ? 'disabled' : ''}>›</button>`
+    + `<button data-nav="12" ${nextDis ? 'disabled' : ''}>»</button>`
+    + `</div>${body}<div class="dp-ft" id="dpToday">今天</div>`;
+}
+function openDatePop() {
+  popMonth = new Date(cur.getFullYear(), cur.getMonth(), 1);
+  renderDatePop();
+  datePop.classList.add('show');
+}
+function closeDatePop() { datePop.classList.remove('show'); }
+
+datePop.addEventListener('click', e => {
+  e.stopPropagation();
+  const nav = e.target.closest('[data-nav]');
+  if (nav) { popMonth.setMonth(popMonth.getMonth() + Number(nav.dataset.nav)); renderDatePop(); return; }
+  if (e.target.id === 'dpToday') { cur = new Date(TODAY.getTime()); renderDate(); closeDatePop(); return; }
+  const cell = e.target.closest('.dp-cell');
+  if (!cell || cell.classList.contains('dis')) return;
+  if (cell.dataset.m !== undefined) {
+    cur = new Date(popMonth.getFullYear(), Number(cell.dataset.m), 1);   // 月维度：选整月
+  } else {
+    const [yy, mm, dd] = cell.dataset.d.split('-').map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    cur = period === 'week' ? weekStart(d) : d;                          // 周维度：取该日所在自然周
+  }
+  renderDate();
+  closeDatePop();
+});
+document.getElementById('dateText').addEventListener('click', e => {
+  e.stopPropagation();
+  datePop.classList.contains('show') ? closeDatePop() : openDatePop();
+});
+document.addEventListener('click', () => closeDatePop());
 
 // 权属切换
 document.getElementById('ownerSeg').addEventListener('click', e => {
@@ -838,21 +1149,35 @@ document.getElementById('ownerSeg').addEventListener('click', e => {
 
 /* ================= 月度迷你趋势图（固定折线形态） ================= */
 const miniCharts = {};
+/* 周维度只取该周 7 天数据，日 / 月沿用 30 天序列 */
+function trendWindow(key) {
+  const t = TRENDS[key];
+  return period === 'week'
+    ? { dates: t.dates.slice(-7), vals: t.vals.slice(-7), refs: t.refs.slice(-7) }
+    : t;
+}
+function buildMiniSeries(key, t, cfg) {
+  const series = [{
+    type: 'line', data: t.vals, showSymbol: false, smooth: true,
+    lineStyle: { color: '#35c8ff', width: 1.5 },
+    areaStyle: key === 'oil' ? { color: 'rgba(53, 200, 255, .15)' } : undefined
+  }];
+  if (t.refs.length) series.push({
+    type: 'line', data: t.refs, showSymbol: false, smooth: true,
+    lineStyle: { color: cfg.refColor, width: 1, type: 'dashed' }
+  });
+  return series;
+}
 function initMiniCharts() {
   document.querySelectorAll('.mini-chart').forEach(el => {
     const key = el.dataset.trend;
-    if (miniCharts[key]) { miniCharts[key].resize(); return; }
-    const cfg = METRIC_TREND[key], t = TRENDS[key];
+    const cfg = METRIC_TREND[key], t = trendWindow(key);
+    if (miniCharts[key]) {
+      miniCharts[key].resize();
+      miniCharts[key].setOption({ xAxis: { data: t.dates }, series: buildMiniSeries(key, t, cfg) });
+      return;
+    }
     const chart = echarts.init(el);
-    const series = [{
-      type: 'line', data: t.vals, showSymbol: false, smooth: true,
-      lineStyle: { color: '#35c8ff', width: 1.5 },
-      areaStyle: key === 'oil' ? { color: 'rgba(53, 200, 255, .15)' } : undefined
-    }];
-    if (t.refs.length) series.push({
-      type: 'line', data: t.refs, showSymbol: false, smooth: true,
-      lineStyle: { color: cfg.refColor, width: 1, type: 'dashed' }
-    });
     chart.setOption({
       grid: { left: 2, right: 4, top: 6, bottom: 2 },
       tooltip: {
@@ -867,7 +1192,7 @@ function initMiniCharts() {
       },
       xAxis: { type: 'category', data: t.dates, show: false, boundaryGap: false },
       yAxis: { type: 'value', show: false, scale: true },
-      series
+      series: buildMiniSeries(key, t, cfg)
     });
     miniCharts[key] = chart;
   });
@@ -884,22 +1209,27 @@ function applyModes() {
 function applyPeriod(p) {
   period = p;
   screenEl.classList.toggle('month', p === 'month');
+  screenEl.classList.toggle('week', p === 'week');
   document.querySelectorAll('#periodSeg button').forEach(b => b.classList.toggle('active', b.dataset.v === p));
   renderDate();
   const d = PERIOD_DATA[p];
   document.getElementById('onlineVal').textContent = d.online;
   document.getElementById('offlineVal').textContent = d.offline;
   document.getElementById('alarmVal').innerHTML = `${d.alarm}<small>条</small>`;
+  const warnMax = Math.max(1, ...d.warns.map(w => w.count || 1));
   document.getElementById('warnBody').innerHTML = d.warns.map(w =>
-    `<tr><td>${w.no}</td><td>${w.type}</td><td class="num"><span class="cnt-bar" style="width:${Math.round(w.ratio * 100)}%"></span></td></tr>`
+    `<tr><td class="no">${w.no}</td><td>${w.type}</td><td class="num">`
+    + `<span class="warn-track"><i style="width:${Math.max(24, Math.round((w.count || 1) / warnMax * 100))}%">${w.count || 1}</i></span>`
+    + `</td></tr>`
   ).join('');
   document.getElementById('warnEmpty').style.display = d.warns.length ? 'none' : 'flex';
-  if (p === 'month') requestAnimationFrame(initMiniCharts);
+  if (p === 'month' || p === 'week') requestAnimationFrame(initMiniCharts);
 }
 document.getElementById('periodSeg').addEventListener('click', e => {
   const btn = e.target.closest('button'); if (!btn) return;
+  e.stopPropagation();
   applyPeriod(btn.dataset.v);
-  saveBoard();
+  openDatePop();          // 点击日 / 周 / 月后直接弹出对应日历（时间维度不落库）
 });
 
 // 初始渲染（日维度）
@@ -917,6 +1247,7 @@ function cardKeyOf(card) {
   else if (card.querySelector('#chartType')) k = 'typeDist';
   else if (card.querySelector('#chartStatus')) k = 'statusDist';
   else if (card.querySelector('#chartWH')) k = 'workhour';
+  else if (card.classList.contains('rank-card')) k = 'rank';
   else if (card.classList.contains('mileage-card')) k = 'mileage';
   else if (card.classList.contains('oil-card')) k = 'oil';
   else if (card.classList.contains('alarm-card')) k = 'alarm';
@@ -926,7 +1257,7 @@ function cardKeyOf(card) {
 }
 try { document.querySelectorAll('.card').forEach(cardKeyOf); } catch (err) { console.error(err); }
 const cardByKey = k => document.querySelector(`.card[data-key="${k}"]`);
-const specOf = c => c.classList.contains('sum-card') ? 'top' : (c.classList.contains('donut-card') || c.classList.contains('status-card')) ? 'big' : 'std';
+
 const presetLayout = () => ({ top: [...preset().top], left: [...preset().left], right: [...preset().right] });
 function getLayout() {
   const vis = c => c.style.display !== 'none';
@@ -957,40 +1288,7 @@ function applyLayout(L) {
   // 卡片显隐改变了地图容器尺寸，通知 Leaflet 重新量取并填充
   try { if (window.map) map.invalidateSize(); } catch (err) {}
 }
-let dragCard = null;
-document.addEventListener('mousedown', e => {
-  const hd = e.target.closest('.card-hd');
-  document.querySelectorAll('.card').forEach(c => c.draggable = false);
-  if (hd && !e.target.closest('button')) hd.closest('.card').draggable = true;   // 仅标题栏可拖起
-});
-document.addEventListener('dragstart', e => {
-  const card = e.target.closest('.card'); if (!card || !card.draggable) return;
-  dragCard = card; card.classList.add('dragging');
-  try { e.dataTransfer.setData('text/plain', card.dataset.key); } catch (err) {}
-});
-document.addEventListener('dragover', e => {
-  const card = e.target.closest('.card');
-  document.querySelectorAll('.card.drop-hint').forEach(c => c.classList.remove('drop-hint'));
-  if (!card || !dragCard || card === dragCard || specOf(card) !== specOf(dragCard)) return;
-  e.preventDefault();   // 同规格槽位组内才允许放置
-  card.classList.add('drop-hint');
-});
-document.addEventListener('drop', e => {
-  const card = e.target.closest('.card');
-  if (!card || !dragCard || card === dragCard || specOf(card) !== specOf(dragCard)) return;
-  e.preventDefault();
-  const ph = document.createElement('div');
-  dragCard.parentNode.insertBefore(ph, dragCard);
-  card.parentNode.insertBefore(dragCard, card);
-  ph.parentNode.insertBefore(card, ph);
-  ph.remove();
-  saveBoard();   // 释放互换后自动保存（版式写入统一看板配置）
-});
-document.addEventListener('dragend', () => {
-  if (dragCard) dragCard.classList.remove('dragging');
-  dragCard = null;
-  document.querySelectorAll('.card.drop-hint').forEach(c => c.classList.remove('drop-hint'));
-});
+/* 大屏内卡片拖拽互换已下线：版式调整统一走「编辑看板组件」编辑器 */
 
 /* Toast 提示 */
 function showToast(msg) {
@@ -1050,21 +1348,39 @@ function popupHtml(m) {
     <div class="full"><label>所在地址</label><b>${d.addr}</b></div>
   </div></div>`;
 }
+const markerRefs = [];
 MAP_MARKERS.forEach(m => {
   const popupOpts = { className: 'dev-popup', closeButton: true, maxWidth: 320, autoPan: true };
+  let mk;
   if (m.type === 'pin') {
     const html = `<div class="pin-m"><div class="pin">${pinSvg(m.online ? '#18a85c' : '#e5484d')}${m.label}</div></div>`;
-    L.marker([m.lat, m.lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }) })
+    mk = L.marker([m.lat, m.lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }) })
       .addTo(map)
       .bindPopup(popupHtml(m), { ...popupOpts, offset: [0, -28] });   // 弹窗位于胶囊上方
   } else {
     const cls = m.type === 'ring' ? `cluster ring${m.size === 'mid' ? ' mid' : ''}` : 'cluster dot';
     const size = m.type === 'ring' ? (m.size === 'mid' ? 44 : 52) : 26;
-    L.marker([m.lat, m.lng], { icon: L.divIcon({ className: '', html: `<div class="${cls}">${m.val}</div>`, iconSize: [size, size] }) })
+    mk = L.marker([m.lat, m.lng], { icon: L.divIcon({ className: '', html: `<div class="${cls}">${m.val}</div>`, iconSize: [size, size] }) })
       .addTo(map)
       .bindPopup(popupHtml(m), { ...popupOpts, offset: [0, -Math.round(size / 2) - 4] });
   }
+  markerRefs.push({ el: mk.getElement(), label: m.label, state: m.state, devType: m.devType, lat: m.lat, lng: m.lng, pin: m.type === 'pin' });
 });
+
+/* 供排行榜联动使用：按设备名高亮 + 飞向该点位；传 null 取消 */
+window.focusDevice = function (name) {
+  let hit = null;
+  markerRefs.forEach(o => {
+    const on = o.pin && o.label === name;
+    if (on) hit = o;
+    if (o.el) o.el.style.opacity = on ? '1' : .15;
+  });
+  if (hit) map.flyTo([hit.lat, hit.lng], Math.max(map.getZoom(), 8), { duration: .8 });
+  return !!hit;
+};
+window.clearDeviceFocus = function () {
+  markerRefs.forEach(o => { if (o.el) o.el.style.opacity = ''; });
+};
 }   // end if (window.L)
 
 // 高级搜索浮层
@@ -1105,37 +1421,89 @@ document.getElementById('fullBtn').addEventListener('click', () => {
 /* ================= 角色看板切换：应用预设/自定义版式 + 图表形态 + 默认时间维度 ================= */
 const boardBtn = document.getElementById('boardBtn');
 const boardMenu = document.getElementById('boardMenu');
-function updateBoardBtn() {
-  const c = curCustom();
-  const nm = (c && c.name) || preset().name;
-  document.getElementById('boardName').textContent = nm;
-  boardMenu.querySelectorAll('button[data-role]').forEach(b => {
-    b.innerHTML = ROLE_PRESETS[b.dataset.role].name
-      + '<span class="edit-tag" data-edit="' + b.dataset.role + '">编辑</span>';
-  });
+function renderBoardMenu() {
+  const items = boards.list.map(b => {
+    // 默认看板「数据大屏」固定版式：不提供编辑与删除入口
+    const icons = b.id === 'default' ? ''
+      : `<span class="bico" data-edit="${b.id}" title="编辑看板组件">✎</span>`
+      + `<span class="bico del" data-del="${b.id}" title="删除看板">✕</span>`;
+    return `<button data-board="${b.id}"${b.id === boards.active ? ' class="on"' : ''}>${b.name}${icons}</button>`;
+  }).join('');
+  boardMenu.innerHTML = items
+    + '<div class="board-menu-ft"><button id="newBoardBtn">＋ 新建看板</button></div>';
 }
-function applyRole(role, silent) {
-  board.role = role;
-  const c = curCustom();
-  const p = preset();
-  applyLayout((c && c.layout) ? c.layout : presetLayout());
-  applyPeriod((c && c.period) || p.period);
+function updateBoardBtn() {
+  document.getElementById('boardName').textContent = activeBoard().name;
+  renderBoardMenu();
+}
+function applyBoard(id, silent) {
+  boards.active = id;
+  const b = activeBoard();
+  applyLayout(b.layout || presetLayout());
+  applyPeriod(preset().period);      // 时间维度不保存：切换看板固定回到默认（日）
   applyModes();
   updateBoardBtn();
-  if (!silent) showToast(`已切换至「${p.name}」` + (c && c.layout ? '（含该看板的自定义布局）' : ''));
+  if (!silent) showToast(`已切换至「${b.name}」`);
 }
+function newBoard() {
+  const customs = boards.list.filter(b => b.id !== 'default');
+  if (customs.length >= MAX_CUSTOM_BOARDS) {
+    showToast(`最多支持 ${MAX_CUSTOM_BOARDS} 个自定义看板（含默认共 5 个），请先删除后再新增`);
+    return;
+  }
+  const id = 'b' + Date.now().toString(36);
+  boards.list.push({ id, name: `自定义看板 ${customs.length + 1}`, layout: presetLayout() });
+  applyBoard(id, true);
+  saveBoards();
+  showToast('已新建看板，可在此调整组件与名称');
+  openBoardEditor();
+}
+let pendingDelId = null;
+function deleteBoard(id) {
+  if (id === 'default') { showToast('默认看板不可删除'); return; }
+  const b = boards.list.find(x => x.id === id); if (!b) return;
+  pendingDelId = id;
+  document.getElementById('delName').textContent = b.name;
+  boardMenu.classList.remove('show');
+  document.getElementById('delModal').classList.add('show');   // 二次确认弹窗
+}
+function closeDelModal() {
+  pendingDelId = null;
+  document.getElementById('delModal').classList.remove('show');
+}
+document.getElementById('delCancel').addEventListener('click', closeDelModal);
+document.getElementById('delModal').addEventListener('click', e => {
+  if (e.target.id === 'delModal') closeDelModal();   // 点遮罩取消
+});
+document.getElementById('delOk').addEventListener('click', () => {
+  const id = pendingDelId;
+  closeDelModal();
+  if (!id) return;
+  boards.list = boards.list.filter(b => b.id !== id);
+  if (boards.active === id) boards.active = 'default';
+  applyBoard(boards.active, true);
+  saveBoards();
+  showToast('看板已删除');
+});
 boardBtn.addEventListener('click', e => { e.stopPropagation(); boardMenu.classList.toggle('show'); });
 boardMenu.addEventListener('click', e => {
-  const edit = e.target.closest('[data-edit]');   // 点击菜单项右侧「编辑」：切换到该看板并打开编辑器
-  if (edit) {
+  e.stopPropagation();
+  const del = e.target.closest('[data-del]');
+  if (del) { deleteBoard(del.dataset.del); return; }
+  const edit = e.target.closest('[data-edit]');
+  if (edit) {                       // 图标编辑：先切到该看板，再打开编辑器
+    e.preventDefault();
     boardMenu.classList.remove('show');
-    if (board.role !== edit.dataset.edit) applyRole(edit.dataset.edit, true);
+    if (edit.dataset.edit !== boards.active) applyBoard(edit.dataset.edit, true);
     openBoardEditor();
     return;
   }
-  const btn = e.target.closest('button[data-role]'); if (!btn) return;
-  boardMenu.classList.remove('show');
-  if (btn.dataset.role !== board.role) applyRole(btn.dataset.role);
+  if (e.target.closest('#newBoardBtn')) { boardMenu.classList.remove('show'); newBoard(); return; }
+  const item = e.target.closest('[data-board]');
+  if (item) {
+    boardMenu.classList.remove('show');
+    if (item.dataset.board !== boards.active) applyBoard(item.dataset.board);
+  }
 });
 
 /* ================= 自定义看板编辑器（组件仅限现有 13 个，勾选 + 区域内拖拽排序） ================= */
@@ -1145,7 +1513,7 @@ const COMPONENTS = [
   { k: 'chuqin', n: '出勤率', spec: 'std' }, { k: 'liyong', n: '利用率', spec: 'std' },
   { k: 'ritai', n: '日台均工时', spec: 'std' }, { k: 'youxiao', n: '有效工时比', spec: 'std' },
   { k: 'oil', n: '油耗统计', spec: 'std' }, { k: 'mileage', n: '里程统计', spec: 'std' }, { k: 'alarm', n: '告警总数', spec: 'std' }, { k: 'warn', n: '预警信息', spec: 'std' },
-  { k: 'typeDist', n: '设备类型分布', spec: 'big' }, { k: 'statusDist', n: '当前运行状态', spec: 'big' }, { k: 'workhour', n: '工时占比', spec: 'big' }
+  { k: 'typeDist', n: '设备类型分布', spec: 'big' }, { k: 'statusDist', n: '当前运行状态', spec: 'big' }, { k: 'workhour', n: '工时占比', spec: 'big' }, { k: 'rank', n: '排行榜', spec: 'big' }
 ];
 const compOf = k => COMPONENTS.find(c => c.k === k);
 const specOfKey = k => compOf(k).spec;
@@ -1155,13 +1523,13 @@ let editorState = null;   // { name, top:[], left:[], right:[] }，数组顺序�
 let dragChk = null;
 
 function renderEditor() {
-  document.getElementById('editorTitle').textContent = preset().name + ' · 组件配置';
+  document.getElementById('editorTitle').textContent = activeBoard().name + ' · 组件配置';
   const inUse = k => editorState.top.includes(k) || editorState.left.includes(k) || editorState.right.includes(k);
   const item = (k, area) => {
     const c = compOf(k), checked = editorState[area].includes(k);
     const usedOther = !checked && inUse(k);
     const dis = usedOther;
-    const tag = usedOther ? '<em class="mut">已在其他区域</em>' : specOfKey(k) === 'big' ? '<em>2单位</em>' : k === 'warn' ? '<em>2单位</em>' : '';
+    const tag = usedOther ? '' : specOfKey(k) === 'big' ? '<em>2单位</em>' : k === 'warn' ? '<em>2单位</em>' : '';
     return `<label class="ed-chk ${checked ? 'on' : ''} ${dis ? 'dis' : ''}" data-k="${k}" data-area="${area}" ${checked ? 'draggable="true"' : ''} title="${checked ? '已勾选：可拖拽排序' : ''}">
       <input type="checkbox" ${checked ? 'checked' : ''} ${dis ? 'disabled' : ''}><i></i>${c.n}${tag}</label>`;
   };
@@ -1227,10 +1595,12 @@ editorBody.addEventListener('dragend', () => {
 });
 function openBoardEditor() {
   try {
-    const c = curCustom();   // 编辑当前激活的看板（其自定义优先，否则以预设为基础）
-    const L = (c && c.layout) ? c.layout : presetLayout();
+    const cur = activeBoard();
+    if (cur.id === 'default') { showToast('默认看板「数据大屏」不支持编辑，请新建看板后自定义'); return; }
+    const b = cur;   // 编辑当前激活的自定义看板
+    const L = b.layout || presetLayout();
     editorState = {
-      name: (c && c.name) || preset().name,
+      name: b.name,
       top: [...L.top], left: [...L.left], right: [...L.right]
     };
     renderEditor();
@@ -1240,25 +1610,20 @@ function openBoardEditor() {
     showToast('编辑器打开失败：' + err.message);
   }
 }
-document.getElementById('editBoardBtn').addEventListener('click', e => {
-  e.stopPropagation(); boardMenu.classList.remove('show');
-  openBoardEditor();
-});
 document.getElementById('editorClose').addEventListener('click', () => editorMask.classList.remove('show'));
 document.getElementById('editorDone').addEventListener('click', () => {
   const layout = { top: [...editorState.top], left: [...editorState.left], right: [...editorState.right] };
-  if (!board.customs[board.role]) board.customs[board.role] = {};
-  const c = board.customs[board.role];
-  c.name = editorState.name.trim() || '自定义看板';
-  c.layout = layout;
-  c.period = period;
+  const b = activeBoard();
+  b.name = editorState.name.trim() || (b.id === 'default' ? '数据大屏' : '自定义看板');
+  b.layout = layout;
   applyLayout(layout);
   applyModes();
   updateBoardBtn();
+  saveBoards();
   editorMask.classList.remove('show');
-  showToast(`「${c.name}」配置已应用`);
+  showToast(`「${b.name}」配置已应用`);
 });
-try { applyRole(board.role, true); }   // 启动：应用当前角色看板（该角色的自定义优先，否则预设）
+try { applyBoard(boards.active, true); }   // 启动：加载当前看板（有自定义版式则用，否则默认版式）
 catch (err) {
   console.error(err);
   try { applyPeriod('day'); showToast('看板配置异常已回退默认：' + err.message); } catch (e) {}
@@ -1267,7 +1632,7 @@ catch (err) {
 /* ================= 左上角看板切换气泡引导（每次刷新自动弹出） ================= */
 const boardTip = document.createElement('div');
 boardTip.className = 'board-tip';
-boardTip.innerHTML = '<p>点击左上角，可以切换 <b>全局管理 / 车队运营 / 维保健康 / 设备作业</b> 大屏，也可进入<b>自定义看板</b>打造专属版式；</p>' +
+boardTip.innerHTML = '<p>默认「数据大屏」版式固定不可编辑；点击 <b>＋ 新建看板</b>（最多 4 个，含默认共 5 个）后，点看板右侧 <b>✎</b> 即可勾选组件、排列版式；</p>' +
   '<div class="bt"><button id="tipOk">知道了</button></div>';
 stage.appendChild(boardTip);
 boardTip.querySelector('#tipOk').addEventListener('click', () => boardTip.classList.remove('show'));
