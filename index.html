@@ -112,6 +112,15 @@
   .day-only, .month-only { display: none !important; }
   #screen:not(.month) .day-only { display: flex !important; }
   #screen.month .month-only { display: flex !important; }
+
+  /* 左上角看板气泡引导（带指向箭头） */
+  .board-tip { position: absolute; left: 14px; top: 64px; z-index: 260; width: 350px; background: linear-gradient(180deg, #16386f, #102c5c); border: 1px solid #2f6cc4; border-radius: 10px; padding: 13px 16px 11px; box-shadow: 0 10px 26px rgba(0, 0, 0, .55); display: none; }
+  .board-tip.show { display: block; }
+  .board-tip::before { content: ''; position: absolute; top: -7px; left: 24px; border: 7px solid transparent; border-top: 0; border-bottom-color: #2f6cc4; }
+  .board-tip p { margin: 0 0 8px; font-size: 12.5px; color: #cfe0f5; line-height: 1.8; }
+  .board-tip p b { color: #35c8ff; font-weight: 700; }
+  .board-tip .bt { text-align: right; }
+  .board-tip .bt button { height: 26px; padding: 0 18px; border-radius: 5px; font-size: 12px; background: linear-gradient(180deg, #1e6fff, #1252d8); color: #fff; cursor: pointer; }
   .bar.cyan .fill { background: linear-gradient(90deg, #0e9cb4, #35e0f2); }
 
   /* ===== 日 / 月维度切换 ===== */
@@ -317,7 +326,7 @@
           <button data-role="admin">全局管理</button>
           <button data-role="fleet">车队运营</button>
           <button data-role="maint">维保健康</button>
-          <button data-role="personal">个人作业</button>
+          <button data-role="personal">设备作业</button>
           <div class="board-menu-ft"><button id="editBoardBtn">编辑看板组件</button></div>
         </div>
       </div>
@@ -612,7 +621,7 @@
   <div class="editor-mask" id="editorMask">
     <div class="editor-panel">
       <div class="editor-hd"><b id="editorTitle">组件配置</b><span id="editorClose">✕</span></div>
-      <p class="editor-tip">组件只能从现有 15 个指标组件中勾选（每个仅一次）：顶部最多 4 个；左/右侧容量各 6 单位——小卡占 1 单位、预警与大卡占 2 单位（大卡=2 小卡）；已勾选组件可在本区域内拖拽排序，未勾选的组件将隐藏。</p>
+      <p class="editor-tip">组件只能从现有 15 个指标组件中勾选（每个仅一次）：顶部最多 4 个；左/右侧容量各 6 单位，每个组件占 1 或 2 单位；已勾选组件可在本区域内拖拽排序，未勾选的组件将隐藏。</p>
       <div class="editor-body" id="editorBody"></div>
       <div class="editor-ft"><button id="editorDone">应用配置</button></div>
     </div>
@@ -669,7 +678,7 @@ const ROLE_PRESETS = {
     top: ['online', 'devStat', 'unavail', 'idle'], left: ['chuqin', 'youxiao', 'ritai', 'liyong', 'workhour'], right: ['statusDist', 'mileage', 'oil', 'warn'] },
   maint: { name: '维保健康', period: 'day',
     top: ['unavail', 'online', 'idle', 'devStat'], left: ['statusDist', 'alarm', 'warn', 'ritai'], right: ['workhour', 'mileage', 'oil', 'liyong'] },
-  personal: { name: '个人作业', period: 'day',
+  personal: { name: '设备作业', period: 'day',
     top: ['online', 'unavail', 'devStat', 'idle'], left: ['ritai', 'youxiao', 'oil', 'chuqin', 'workhour'], right: ['statusDist', 'alarm', 'warn', 'mileage'] }
 };
 /* 预设版式版本号：ROLE_PRESETS 变更时递增，自动失效旧的自定义缓存，使新预设生效 */
@@ -1254,6 +1263,16 @@ catch (err) {
   console.error(err);
   try { applyPeriod('day'); showToast('看板配置异常已回退默认：' + err.message); } catch (e) {}
 }
+
+/* ================= 左上角看板切换气泡引导（每次刷新自动弹出） ================= */
+const boardTip = document.createElement('div');
+boardTip.className = 'board-tip';
+boardTip.innerHTML = '<p>点击左上角，可以切换 <b>全局管理 / 车队运营 / 维保健康 / 设备作业</b> 大屏，也可进入<b>自定义看板</b>打造专属版式；</p>' +
+  '<div class="bt"><button id="tipOk">知道了</button></div>';
+stage.appendChild(boardTip);
+boardTip.querySelector('#tipOk').addEventListener('click', () => boardTip.classList.remove('show'));
+document.getElementById('boardBtn').addEventListener('click', () => boardTip.classList.remove('show'));
+setTimeout(() => boardTip.classList.add('show'), 500);
 </script>
 </body>
 </html>
